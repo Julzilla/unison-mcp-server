@@ -1,4 +1,4 @@
-"""Regression tests for the OPUS_AUDIT.md remediation.
+"""Regression tests for the security & correctness audit remediation.
 
 Each test pins a specific fixed finding so a future change cannot silently
 reintroduce it. Kept dependency-light and offline (no real API/network calls).

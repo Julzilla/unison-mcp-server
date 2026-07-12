@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.0.0] - 2026-07-12
+
 ### Security
 
-Remediation of the OPUS_AUDIT.md adversarial audit (see that file for per-finding detail and status). Highlights:
+Remediation of an internal adversarial security & correctness audit. Highlights:
 
 - **Path sandbox no longer exposes pseudo-filesystems (D-1).** `/proc`, `/sys`, `/dev`, and `/run` are now in `DANGEROUS_SYSTEM_PATHS`, closing a read-sandbox escape where `/proc/self/environ` (a zero-size, regular file on Linux) leaked the server's entire environment — every provider API key — into a model prompt. The `file_utils.py` "Security Model" docstring was corrected to describe the actual blocklist (it falsely claimed PROJECT_ROOT confinement).
 - **clink `read_only=True` is now honest and enforced for Codex (A-1, A-4).** `CodexAgent` runs `codex exec --sandbox read-only` and strips the manifest's `--dangerously-bypass-approvals-and-sandbox` (which had disabled Codex's sandbox and approval prompt, allowing prompt-injected command execution). `tools/clink.py` no longer reports `read_only_enforced: true` unconditionally — it reflects whether a real layer-1 sandbox flag was applied and adds a `read_only_enforcement` breakdown and `read_only_verification_coverage` caveat.
