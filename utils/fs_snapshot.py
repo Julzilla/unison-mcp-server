@@ -144,64 +144,107 @@ def _is_gitignored(rel_path: str, patterns: list[str]) -> bool:
 
 def capture_snapshot(
     directory: str | Path,
-    max_depth: int = 3,
-) -> dict[str, tuple[int, int]]:
+    max_depth: int | None = None,
+    *,
+    include_ignored: bool = False,
+    max_entries: int = 50_000,
+) -> dict[str, tuple[int, int, int]]:
     """Capture a filesystem snapshot of a directory.
 
-    Returns a dict mapping relative file paths to ``(mtime_ns, size)`` tuples.
-    Respects ``.gitignore`` patterns and excludes transient files.
+    Returns a dict mapping relative file paths to ``(mtime_ns, ctime_ns, size)``
+    tuples. ``ctime_ns`` is included so a content edit that restores the
+    original mtime and byte length (an evasion of the old ``(mtime_ns, size)``
+    key) still registers as a change — ctime updates on any write and cannot be
+    portably restored. Symlinks are recorded (via ``lstat``, never followed) so
+    creating/retargeting/deleting one is detected.
 
     Args:
         directory: Root directory to snapshot.
-        max_depth: Maximum directory depth to traverse (default 3).
+        max_depth: Maximum directory depth to traverse. ``None`` (default) means
+            no depth limit. Read-only verification must not silently miss writes
+            nested below an arbitrary depth, so it relies on this default;
+            traversal is still bounded by ``max_entries``.
+        include_ignored: When True, do NOT skip ``.gitignore``'d or transient
+            files. Read-only verification passes this so a write to a gitignored
+            path (e.g. ``.env``, ``secrets/``) or a ``*.log`` cannot evade
+            detection. When False (default) those files are excluded to reduce
+            noise.
+        max_entries: Safety cap on the number of files recorded; if exceeded a
+            warning is logged and coverage becomes partial (never silent).
 
     Returns:
-        Dict of ``{relative_path: (mtime_ns, size)}``.
+        Dict of ``{relative_path: (mtime_ns, ctime_ns, size)}``.
     """
     root = Path(directory).resolve()
     if not root.is_dir():
         return {}
 
-    gitignore_patterns = _load_gitignore_patterns(root)
-    snapshot: dict[str, tuple[int, int]] = {}
+    gitignore_patterns: list[str] = [] if include_ignored else _load_gitignore_patterns(root)
+    snapshot: dict[str, tuple[int, int, int]] = {}
+    truncated = False
 
     def _walk(current: Path, depth: int) -> None:
-        if depth > max_depth:
+        nonlocal truncated
+        if max_depth is not None and depth > max_depth:
             return
         try:
             entries = sorted(current.iterdir())
-        except PermissionError:
+        except OSError:
             return
 
         for entry in entries:
+            if len(snapshot) >= max_entries:
+                truncated = True
+                return
             try:
                 rel = str(entry.relative_to(root))
             except ValueError:
                 continue
 
-            if _is_gitignored(rel, gitignore_patterns):
-                continue
-            if _is_transient(rel):
-                continue
+            if not include_ignored:
+                if _is_gitignored(rel, gitignore_patterns):
+                    continue
+                if _is_transient(rel):
+                    continue
 
             if entry.is_symlink():
-                continue
-            if entry.is_file():
+                # Record the link itself without following it, so a symlink
+                # created/retargeted/deleted by the CLI is detected instead of
+                # being an invisible write channel.
                 try:
-                    stat = entry.stat()
-                    snapshot[rel] = (stat.st_mtime_ns, stat.st_size)
+                    st = entry.lstat()
+                    snapshot[rel] = (st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+                except OSError:
+                    pass
+                continue
+
+            try:
+                is_file = entry.is_file()
+            except OSError:
+                continue
+
+            if is_file:
+                try:
+                    st = entry.stat()
+                    snapshot[rel] = (st.st_mtime_ns, st.st_ctime_ns, st.st_size)
                 except OSError:
                     pass
             elif entry.is_dir():
                 _walk(entry, depth + 1)
 
     _walk(root, 1)
+    if truncated:
+        logger.warning(
+            "Filesystem snapshot of %s hit the %d-entry cap; read-only verification coverage is partial",
+            root,
+            max_entries,
+        )
     return snapshot
 
 
 def diff_snapshots(
-    before: dict[str, tuple[int, int]],
-    after: dict[str, tuple[int, int]],
+    before: dict[str, tuple[int, ...]],
+    after: dict[str, tuple[int, ...]],
 ) -> SnapshotDiff:
     """Compare two snapshots and return the differences.
 

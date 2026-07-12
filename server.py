@@ -25,7 +25,7 @@ from utils.logging_setup import configure_logging
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-log_level = (get_env("LOG_LEVEL", "DEBUG") or "DEBUG").upper()
+log_level = (get_env("LOG_LEVEL", "INFO") or "INFO").upper()
 _, _mcp_activity_logger = configure_logging(log_level)
 
 logger = logging.getLogger(__name__)

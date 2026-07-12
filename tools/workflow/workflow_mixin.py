@@ -20,6 +20,7 @@ Features:
 - Comprehensive type annotations for IDE support
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -603,7 +604,34 @@ class BaseWorkflowMixin(ABC):
     # Main Workflow Orchestration
     # ================================================================================
 
+    def _get_workflow_lock(self) -> "asyncio.Lock":
+        """Return this instance's per-request serialization lock (lazy-created).
+
+        Workflow tools are cached as singletons in the tool registry, but the MCP
+        SDK dispatches every request as a concurrent task and this class keeps
+        per-request state on ``self`` (work_history, consolidated_findings,
+        _model_context). Serializing ``execute_workflow`` per instance prevents a
+        second concurrent call to the same tool from clobbering that state across
+        an ``await`` (e.g. during streaming expert analysis).
+        """
+        lock = getattr(self, "_workflow_lock", None)
+        if lock is None:
+            # Safe to create without a running loop on Python 3.10+; the getattr/
+            # set pair has no await between them so it cannot race under asyncio.
+            lock = asyncio.Lock()
+            self._workflow_lock = lock
+        return lock
+
     async def execute_workflow(self, arguments: dict[str, Any]) -> list[TextContent]:
+        """Serialize per-instance execution, then run the workflow.
+
+        See :meth:`_get_workflow_lock` for why serialization is required on the
+        registry-cached singleton.
+        """
+        async with self._get_workflow_lock():
+            return await self._execute_workflow_impl(arguments)
+
+    async def _execute_workflow_impl(self, arguments: dict[str, Any]) -> list[TextContent]:
         """
         Main workflow orchestration following debug tool pattern.
 
@@ -704,6 +732,13 @@ class BaseWorkflowMixin(ABC):
                 clean_args = {k: v for k, v in arguments.items() if k != "_context"}
                 continuation_id = create_thread(self.get_name(), clean_args)
                 self.initial_request = request.step
+                # Reset state left over from a previous (unrelated) session on this
+                # registry-cached singleton so a brand-new conversation does not
+                # inherit stale findings/history (which would inflate status counts,
+                # poison the expert-analysis prompt, and be persisted into the new
+                # thread). Mirrors ConsensusTool's reset.
+                self.work_history = []
+                self.consolidated_findings = ConsolidatedFindings()
                 # Allow tools to store initial description for expert analysis
                 self.store_initial_issue(request.step)
 
@@ -1462,8 +1497,6 @@ class BaseWorkflowMixin(ABC):
         If the provider or session does not support streaming or progress
         notifications, falls back gracefully.
         """
-        import asyncio
-
         from utils.streaming import StreamProgressNotifier
 
         # Obtain the MCP server instance and progress token
@@ -1480,33 +1513,48 @@ class BaseWorkflowMixin(ABC):
         )
 
         accumulated_text = ""
-        usage = None
+
+        # Bridge chunks from the worker thread to the event loop AS THEY ARRIVE
+        # via a thread-safe queue, instead of buffering the entire response before
+        # emitting any notification. This makes progress notifications flow during
+        # generation (their actual purpose: keepalive/progress), rather than as a
+        # single burst after the response is already assembled.
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        _STREAM_DONE = object()
 
         def _run_stream():
-            """Run the synchronous streaming generator in a thread."""
-            nonlocal accumulated_text, usage
-            chunks = []
-            for chunk in provider.generate_content_stream(
-                prompt=prompt,
-                model_name=model_name,
-                system_prompt=system_prompt,
-                temperature=temperature,
-                thinking_mode=thinking_mode,
-                images=images,
-            ):
-                chunks.append(chunk)
-            return chunks
+            """Run the synchronous streaming generator in a worker thread, pushing
+            each chunk onto the loop's queue as it is produced."""
+            try:
+                for chunk in provider.generate_content_stream(
+                    prompt=prompt,
+                    model_name=model_name,
+                    system_prompt=system_prompt,
+                    temperature=temperature,
+                    thinking_mode=thinking_mode,
+                    images=images,
+                ):
+                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
+            except Exception as exc:  # surface to the consumer side
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _STREAM_DONE)
 
-        # Run the blocking generator in a thread
-        chunks = await asyncio.to_thread(_run_stream)
-
-        # Send progress notifications for each chunk
-        for chunk in chunks:
-            accumulated_text += chunk.text
-            if chunk.is_final and chunk.usage:
-                usage = chunk.usage
-            if notifier:
-                await notifier.notify_chunk(chunk)
+        worker = asyncio.create_task(asyncio.to_thread(_run_stream))
+        try:
+            while True:
+                item = await queue.get()
+                if item is _STREAM_DONE:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                accumulated_text += item.text
+                if notifier:
+                    await notifier.notify_chunk(item)
+        finally:
+            # Ensure the worker thread has finished (and re-raise any error it hit).
+            await worker
 
         if notifier:
             await notifier.notify_complete(accumulated_text)
@@ -1605,7 +1653,12 @@ class BaseWorkflowMixin(ABC):
                     images=images,
                 )
             else:
-                model_response = provider.generate_content(
+                # Offload to a worker thread so the blocking provider call + retry
+                # sleeps do not freeze the event loop (non-streaming expert
+                # analysis). to_thread(generate_content) keeps sync-method stubs
+                # in tests working.
+                model_response = await asyncio.to_thread(
+                    provider.generate_content,
                     prompt=prompt,
                     model_name=model_name,
                     system_prompt=system_prompt,

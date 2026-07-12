@@ -9,6 +9,12 @@ from pathlib import Path
 
 # Dangerous system paths - block these AND all their subdirectories
 # These are system directories where user code should never reside
+#
+# The pseudo-filesystems (/proc, /sys, /dev, /run) are critical: without them a
+# path such as /proc/self/environ passes validation and leaks the server's
+# entire environment (every provider API key) into a model prompt. They report
+# st_size == 0 and are regular files (S_IFREG) on Linux, so the size/is_file
+# guards in read_file_content do not stop them -- only this blocklist does.
 DANGEROUS_SYSTEM_PATHS = {
     "/",
     "/etc",
@@ -16,6 +22,10 @@ DANGEROUS_SYSTEM_PATHS = {
     "/bin",
     "/var",
     "/root",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
     "C:\\Windows",
     "C:\\Program Files",
 }

@@ -271,6 +271,7 @@ class TestEndToEndDispatch:
 
         class _SlowProcess:
             returncode = 0
+            pid = 987654321  # non-existent pid; process-group kill falls back to kill()
             _raised_once = False
 
             async def communicate(self, _data=None):

@@ -13,9 +13,16 @@ Key Features:
 - Comprehensive error handling with informative messages
 
 Security Model:
-- All file access is restricted to PROJECT_ROOT and its subdirectories
 - Absolute paths are required to prevent ambiguity
-- Symbolic links are resolved to ensure they stay within bounds
+- Symbolic links are resolved (``Path.resolve()``) so the true target is what
+  gets policy-checked, not the link
+- Access is denied to a blocklist of dangerous system directories and the
+  pseudo-filesystems (``/proc``, ``/sys``, ``/dev``, ``/run``) and to the home
+  directory root -- see ``utils.security_config.is_dangerous_path`` and
+  ``is_home_directory_root``. NOTE: this is a *blocklist*, not a PROJECT_ROOT
+  allowlist -- any absolute path outside those denied locations (e.g. other
+  project trees, or files under the user's home subdirectories) is readable by
+  design, because the MCP client passes the paths it wants embedded.
 
 CONVERSATION MEMORY INTEGRATION:
 This module works with the conversation memory system to support efficient

@@ -73,8 +73,22 @@ class SQLiteStorageBackend:
     def __init__(self, db_path: Optional[str] = None) -> None:
         self._db_path = db_path or get_env("STORAGE_SQLITE_PATH") or _DEFAULT_DB_PATH
 
-        # Ensure parent directory exists
-        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        # Ensure parent directory exists. The DB stores plaintext conversation
+        # history (prompts, responses, referenced file paths, sometimes file
+        # contents), so restrict the directory to 0700 and drop a .gitignore so
+        # it is never accidentally committed when it lands inside a project tree.
+        db_parent = Path(self._db_path).parent
+        db_parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(db_parent, 0o700)
+        except OSError:  # pragma: no cover - platform/permission dependent
+            pass
+        try:
+            gitignore = db_parent / ".gitignore"
+            if not gitignore.exists():
+                gitignore.write_text("*\n", encoding="utf-8")
+        except OSError:  # pragma: no cover - best effort
+            pass
 
         # Open connection -- allow access from any thread
         self._connection = sqlite3.connect(
@@ -85,6 +99,13 @@ class SQLiteStorageBackend:
         # WAL mode for concurrent reads; busy timeout for write contention
         self._connection.execute("PRAGMA journal_mode=WAL")
         self._connection.execute("PRAGMA busy_timeout=5000")
+
+        # Restrict the DB file and its WAL/SHM sidecars to 0600 (owner-only).
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.chmod(f"{self._db_path}{suffix}", 0o600)
+            except OSError:  # pragma: no cover - sidecars may not exist yet
+                pass
 
         # Serialise all writes
         self._lock = threading.Lock()
@@ -218,6 +239,56 @@ class SQLiteStorageBackend:
     def setex(self, key: str, ttl_seconds: int, value: str) -> None:
         """Redis-compatible alias for :meth:`set_with_ttl`."""
         self.set_with_ttl(key, ttl_seconds, value)
+
+    def atomic_update(self, key: str, ttl_seconds: int, mutator) -> bool:
+        """Atomically read-modify-write *key* under a single ``BEGIN IMMEDIATE``.
+
+        ``mutator`` receives the current stored value (``str``) or ``None`` when
+        the key is absent/expired, and returns the new value string to store, or
+        ``None`` to abort without writing. ``BEGIN IMMEDIATE`` acquires the
+        database write lock *before* the read, so two processes sharing the DB
+        cannot interleave a read-modify-write and silently drop an update (the
+        loser blocks on the lock, then sees the winner's committed value).
+
+        Returns True if a value was written, False if the mutator aborted.
+        """
+        now = time.time()
+        with self._lock:
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                cursor = self._connection.execute("SELECT value, expires_at FROM kv_store WHERE key = ?", (key,))
+                row = cursor.fetchone()
+                current: Optional[str] = None
+                if row is not None:
+                    value, expires_at = row
+                    if expires_at is None or expires_at > now:
+                        current = value
+
+                new_value = mutator(current)
+                if new_value is None:
+                    self._connection.rollback()
+                    return False
+
+                expires_at = now + ttl_seconds
+                self._connection.execute(
+                    """
+                    INSERT INTO kv_store (key, value, expires_at, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value      = excluded.value,
+                        expires_at = excluded.expires_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (key, new_value, expires_at, now, now),
+                )
+                self._connection.commit()
+                return True
+            except Exception:
+                try:
+                    self._connection.rollback()
+                except Exception:  # pragma: no cover - defensive
+                    pass
+                raise
 
     def shutdown(self) -> None:
         """Stop the sweep thread and close the database connection."""

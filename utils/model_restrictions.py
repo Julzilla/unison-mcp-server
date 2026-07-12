@@ -48,12 +48,19 @@ class ModelRestrictionService:
     """
 
     # Environment variable names
+    # CUSTOM and AZURE are included so the restriction service (used by model
+    # listing and auto-mode fallback selection) honours the same allowlists the
+    # providers already enforce at generation time. Without them, listmodels
+    # exposes restricted models and auto-mode can pick a disallowed model that
+    # then hard-fails at the boundary.
     ENV_VARS = {
         ProviderType.OPENAI: "OPENAI_ALLOWED_MODELS",
         ProviderType.GOOGLE: "GOOGLE_ALLOWED_MODELS",
         ProviderType.XAI: "XAI_ALLOWED_MODELS",
         ProviderType.OPENROUTER: "OPENROUTER_ALLOWED_MODELS",
         ProviderType.DIAL: "DIAL_ALLOWED_MODELS",
+        ProviderType.CUSTOM: "CUSTOM_ALLOWED_MODELS",
+        ProviderType.AZURE: "AZURE_OPENAI_ALLOWED_MODELS",
     }
 
     def __init__(self):

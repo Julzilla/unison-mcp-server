@@ -20,6 +20,20 @@ from utils.request_helpers import get_follow_up_instructions
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_for_log(value: Any, max_len: int = 128) -> str:
+    """Neutralize log-injection: escape CR/LF (and other control chars) and cap
+    length before writing an untrusted value (tool name, continuation_id,
+    clientInfo) to the logs. Prevents a crafted value from forging log lines
+    (CWE-117)."""
+    text = str(value)
+    text = text.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    # Strip any remaining non-printable control characters.
+    text = "".join(ch if ch.isprintable() else "?" for ch in text)
+    if len(text) > max_len:
+        text = text[:max_len] + "...(truncated)"
+    return text
+
+
 def register(server, tool_registry):
     """
     Register list_tools and call_tool handlers on the MCP server.
@@ -48,9 +62,10 @@ def register(server, tool_registry):
 
                 try:
                     mcp_activity_logger = logging.getLogger("mcp_activity")
-                    friendly_name = client_info.get("friendly_name", "CLI Agent")
-                    raw_name = client_info.get("name", "Unknown")
-                    version = client_info.get("version", "Unknown")
+                    # clientInfo is attacker-influenced; sanitize before logging.
+                    friendly_name = _sanitize_for_log(client_info.get("friendly_name", "CLI Agent"))
+                    raw_name = _sanitize_for_log(client_info.get("name", "Unknown"))
+                    version = _sanitize_for_log(client_info.get("version", "Unknown"))
                     mcp_activity_logger.info("MCP_CLIENT_INFO: %s (raw=%s v%s)", friendly_name, raw_name, version)
                 except Exception:
                     pass
@@ -88,30 +103,41 @@ def register(server, tool_registry):
         Routes tool calls to their appropriate handlers, managing model resolution,
         conversation thread reconstruction, and file size validation at the MCP boundary.
         """
-        logger.info("MCP tool call: %s", name)
+        # Untrusted values (tool name, continuation_id) are logged before any
+        # validation; sanitize them so a crafted value cannot forge log lines.
+        safe_name = _sanitize_for_log(name)
+        logger.info("MCP tool call: %s", safe_name)
         logger.debug("MCP tool arguments: %s", list(arguments.keys()))
 
         try:
             mcp_activity_logger = logging.getLogger("mcp_activity")
-            mcp_activity_logger.info("TOOL_CALL: %s with %d arguments", name, len(arguments))
+            mcp_activity_logger.info("TOOL_CALL: %s with %d arguments", safe_name, len(arguments))
         except Exception:
             pass
+
+        # Cheap gate BEFORE any stateful work: reject unknown/disabled tools up
+        # front so a continuation_id call to a nonexistent tool does not persist
+        # an orphan user turn (via reconstruct_thread_context -> add_turn) and
+        # burn a turn-budget slot before failing.
+        if not tool_registry.is_available(name):
+            return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
         # Handle thread context reconstruction if continuation_id is present
         if "continuation_id" in arguments and arguments["continuation_id"]:
             continuation_id = arguments["continuation_id"]
-            logger.debug("Resuming conversation thread: %s", continuation_id)
+            safe_cid = _sanitize_for_log(continuation_id)
+            logger.debug("Resuming conversation thread: %s", safe_cid)
             logger.debug(
                 "[CONVERSATION_DEBUG] Tool '%s' resuming thread %s with %d arguments",
-                name,
-                continuation_id,
+                safe_name,
+                safe_cid,
                 len(arguments),
             )
             logger.debug("[CONVERSATION_DEBUG] Original arguments keys: %s", list(arguments.keys()))
 
             try:
                 mcp_activity_logger = logging.getLogger("mcp_activity")
-                mcp_activity_logger.info("CONVERSATION_RESUME: %s resuming thread %s", name, continuation_id)
+                mcp_activity_logger.info("CONVERSATION_RESUME: %s resuming thread %s", safe_name, safe_cid)
             except Exception:
                 pass
 
@@ -120,11 +146,16 @@ def register(server, tool_registry):
                 "[CONVERSATION_DEBUG] After thread reconstruction, arguments keys: %s",
                 list(arguments.keys()),
             )
-            if "_remaining_tokens" in arguments:
-                logger.debug(
-                    "[CONVERSATION_DEBUG] Remaining token budget: %s",
-                    f"{arguments['_remaining_tokens']:,}",
-                )
+            _reconstructed_ctx = None
+            if logger.isEnabledFor(logging.DEBUG):
+                from utils.tool_execution_context import ToolExecutionContext as _TEC
+
+                _reconstructed_ctx = _TEC.from_arguments(arguments)
+                if _reconstructed_ctx is not None:
+                    logger.debug(
+                        "[CONVERSATION_DEBUG] Remaining token budget: %s",
+                        f"{_reconstructed_ctx.remaining_tokens:,}",
+                    )
 
         # Route to registered tools
         if tool_registry.is_available(name):
@@ -188,13 +219,31 @@ def register(server, tool_registry):
 
             # Create model context and typed execution context
             model_context = ModelContext(model_name, model_option)
+            import dataclasses
+
             from utils.tool_execution_context import ToolExecutionContext
 
-            arguments["_context"] = ToolExecutionContext(
-                model_context=model_context,
-                resolved_model_name=model_name,
-                registry=registry,
-            )
+            # Preserve continuation state that reconstruct_thread_context already
+            # computed (remaining_tokens, original_user_prompt). Rebuilding the
+            # context from scratch here would reset them to their defaults
+            # (0 / ""), which makes continuation size-validation run against the
+            # full enhanced prompt (spurious "prompt too large") and collapses the
+            # workflow expert-analysis file budget to ~1k tokens. Only overlay the
+            # freshly resolved model information onto the existing context.
+            _existing_ctx = ToolExecutionContext.from_arguments(arguments)
+            if _existing_ctx is not None and dataclasses.is_dataclass(_existing_ctx):
+                arguments["_context"] = dataclasses.replace(
+                    _existing_ctx,
+                    model_context=model_context,
+                    resolved_model_name=model_name,
+                    registry=registry,
+                )
+            else:
+                arguments["_context"] = ToolExecutionContext(
+                    model_context=model_context,
+                    resolved_model_name=model_name,
+                    registry=registry,
+                )
             logger.debug(
                 "Model context created for %s with %d token capacity",
                 model_name,

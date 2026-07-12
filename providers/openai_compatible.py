@@ -3,6 +3,7 @@
 import copy
 import ipaddress
 import logging
+import threading
 from collections.abc import Generator
 from typing import Optional
 from urllib.parse import urlparse
@@ -48,6 +49,13 @@ class OpenAICompatibleProvider(ModelProvider):
         self._allowed_alias_cache: dict[str, str] = {}
         super().__init__(api_key, **kwargs)
         self._client = None
+        # Serialize lazy client construction: the property mutates global
+        # os.environ (proxy var suppression) and does a check-then-act on
+        # self._client, both of which race under concurrent dispatch (consensus).
+        # Distinct from any subclass lock (e.g. DIAL's _client_lock guarding its
+        # deployment-client cache) so acquiring this inside that one cannot
+        # deadlock a non-reentrant lock.
+        self._client_init_lock = threading.Lock()
         self.base_url = base_url
         self.organization = kwargs.get("organization")
         self.allowed_models = self._parse_allowed_models()
@@ -262,7 +270,12 @@ class OpenAICompatibleProvider(ModelProvider):
     @property
     def client(self):
         """Lazy initialization of OpenAI client with security checks and timeout configuration."""
-        if self._client is None:
+        if self._client is not None:
+            return self._client
+        with self._client_init_lock:
+            # Double-checked: another thread may have built it while we waited.
+            if self._client is not None:
+                return self._client
             import httpx
 
             proxy_env_vars = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
@@ -374,14 +387,12 @@ class OpenAICompatibleProvider(ModelProvider):
         Raises:
             ValueError: If output_text is missing, None, or not a string
         """
-        logging.debug(f"Response object type: {type(response)}")
-        logging.debug(f"Response attributes: {dir(response)}")
+        logging.debug("Response object type: %s", type(response).__name__)
 
         if not hasattr(response, "output_text"):
             raise ValueError(f"o3-pro response missing output_text field. Response type: {type(response).__name__}")
 
         content = response.output_text
-        logging.debug(f"Extracted output_text: '{content}' (type: {type(content)})")
 
         if content is None:
             raise ValueError("o3-pro returned None for output_text")
@@ -389,7 +400,47 @@ class OpenAICompatibleProvider(ModelProvider):
         if not isinstance(content, str):
             raise ValueError(f"o3-pro output_text is not a string. Got type: {type(content).__name__}")
 
+        # Log only the length, never the content: the model may echo back secrets
+        # from reviewed code, and LOG_LEVEL can be DEBUG. An unescaped f-string of
+        # model output would also permit log-line forgery.
+        logging.debug("Extracted output_text: %d chars", len(content))
+
         return content
+
+    @staticmethod
+    def _to_responses_content(content, role: str) -> list:
+        """Convert a chat-format message ``content`` into Responses API content.
+
+        Chat-completions content is either a plain string or a list of parts
+        (``{"type": "text", ...}`` / ``{"type": "image_url", ...}``). The Responses
+        API uses ``input_text`` / ``output_text`` and ``input_image`` instead.
+        Previously a list was assigned verbatim to an ``input_text`` ``text``
+        field, producing a malformed payload (400) and never mapping images, so
+        vision was unusable on every responses-API model.
+        """
+        text_type = "output_text" if role == "assistant" else "input_text"
+        if isinstance(content, str):
+            return [{"type": text_type, "text": content}]
+
+        parts: list = []
+        if isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                ptype = part.get("type")
+                if ptype == "text":
+                    parts.append({"type": text_type, "text": part.get("text", "")})
+                elif ptype == "image_url":
+                    image_url = part.get("image_url")
+                    url = image_url.get("url") if isinstance(image_url, dict) else image_url
+                    if url:
+                        parts.append({"type": "input_image", "image_url": url})
+                elif ptype in ("input_text", "output_text", "input_image"):
+                    parts.append(part)  # already in Responses format
+
+        if not parts:
+            parts.append({"type": text_type, "text": content if isinstance(content, str) else ""})
+        return parts
 
     def _generate_with_responses_endpoint(
         self,
@@ -402,7 +453,7 @@ class OpenAICompatibleProvider(ModelProvider):
     ) -> ModelResponse:
         """Generate content using the /v1/responses endpoint for reasoning models."""
         # Convert messages to the correct format for responses endpoint
-        input_messages = []
+        input_messages: list = []
 
         for message in messages:
             role = message.get("role", "")
@@ -411,11 +462,13 @@ class OpenAICompatibleProvider(ModelProvider):
             if role == "system":
                 # For o3-pro, system messages should be handled carefully to avoid policy violations
                 # Instead of prefixing with "System:", we'll include the system content naturally
-                input_messages.append({"role": "user", "content": [{"type": "input_text", "text": content}]})
+                input_messages.append({"role": "user", "content": self._to_responses_content(content, "user")})
             elif role == "user":
-                input_messages.append({"role": "user", "content": [{"type": "input_text", "text": content}]})
+                input_messages.append({"role": "user", "content": self._to_responses_content(content, "user")})
             elif role == "assistant":
-                input_messages.append({"role": "assistant", "content": [{"type": "output_text", "text": content}]})
+                input_messages.append(
+                    {"role": "assistant", "content": self._to_responses_content(content, "assistant")}
+                )
 
         # Prepare completion parameters for responses endpoint
         # Based on OpenAI documentation, use nested reasoning object for responses endpoint
@@ -438,9 +491,11 @@ class OpenAICompatibleProvider(ModelProvider):
         else:
             logging.debug(f"Omitting 'store' parameter for OpenRouter provider (model: {model_name})")
 
-        # Add max tokens if specified (using max_completion_tokens for responses endpoint)
+        # Add max tokens if specified. The Responses API parameter is
+        # ``max_output_tokens`` (``max_completion_tokens`` is chat-completions
+        # only and raises TypeError on responses.create).
         if max_output_tokens:
-            completion_params["max_completion_tokens"] = max_output_tokens
+            completion_params["max_output_tokens"] = max_output_tokens
 
         # For responses endpoint, we only add parameters that are explicitly supported
         # Remove unsupported chat completion parameters that may cause API errors
@@ -452,28 +507,25 @@ class OpenAICompatibleProvider(ModelProvider):
 
         def _attempt() -> ModelResponse:
             attempt_counter["value"] += 1
-            import json
 
-            sanitized_params = self._sanitize_for_logging(completion_params)
-            logging.info(
-                f"o3-pro API request (sanitized): {json.dumps(sanitized_params, indent=2, ensure_ascii=False)}"
+            # Log only structural metadata, not message text. The previous INFO log
+            # dumped message prefixes (system + user prompt + history) even after
+            # sanitizing api_key, which persisted prompt content to disk on every
+            # attempt.
+            logging.debug(
+                "Responses API request: model=%s, messages=%d, reasoning_effort=%s",
+                completion_params.get("model"),
+                len(completion_params.get("input", [])),
+                (completion_params.get("reasoning") or {}).get("effort"),
             )
 
             response = self.client.responses.create(**completion_params)
 
             content = self._safe_extract_output_text(response)
 
-            usage = None
-            if hasattr(response, "usage"):
-                usage = self._extract_usage(response)
-            elif hasattr(response, "input_tokens") and hasattr(response, "output_tokens"):
-                input_tokens = getattr(response, "input_tokens", 0) or 0
-                output_tokens = getattr(response, "output_tokens", 0) or 0
-                usage = {
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens,
-                }
+            # _extract_usage handles both chat-completions and Responses-API
+            # field names, so a single call covers all shapes.
+            usage = self._extract_usage(response) or None
 
             return ModelResponse(
                 content=content,
@@ -779,6 +831,17 @@ class OpenAICompatibleProvider(ModelProvider):
             )
             return
 
+        # Circuit breaker: the streaming path bypasses _run_with_retries, so
+        # enforce and update breaker health here too (fail fast when down; record
+        # the outcome so a dead provider is fail-fasted next time).
+        if not self._circuit_breaker.allow_request():
+            from utils.circuit_breaker import ProviderUnavailable
+
+            raise ProviderUnavailable(
+                provider_name=self._circuit_breaker._provider_name,
+                circuit_state=self._circuit_breaker.state.value,
+            )
+
         try:
             stream = self.client.chat.completions.create(**completion_params)
             usage = {}
@@ -795,15 +858,19 @@ class OpenAICompatibleProvider(ModelProvider):
                 finish_reason = chunk.choices[0].finish_reason
 
                 if finish_reason is not None:
+                    self._circuit_breaker.record_success()
                     yield StreamChunk(text=delta_content, is_final=True, usage=usage or None)
                     return
                 elif delta_content:
                     yield StreamChunk(text=delta_content, is_final=False)
 
             # If we exit the loop without a finish_reason, yield a final chunk
+            self._circuit_breaker.record_success()
             yield StreamChunk(text="", is_final=True, usage=usage or None)
 
         except Exception as exc:
+            if self._is_provider_unhealthy_error(exc):
+                self._circuit_breaker.record_failure()
             error_msg = f"{self.FRIENDLY_NAME} streaming error for model {resolved_model}: {exc}"
             raise RuntimeError(error_msg) from exc
 
@@ -846,10 +913,23 @@ class OpenAICompatibleProvider(ModelProvider):
         usage = {}
 
         if hasattr(response, "usage") and response.usage:
-            # Safely extract token counts with None handling
-            usage["input_tokens"] = getattr(response.usage, "prompt_tokens", 0) or 0
-            usage["output_tokens"] = getattr(response.usage, "completion_tokens", 0) or 0
-            usage["total_tokens"] = getattr(response.usage, "total_tokens", 0) or 0
+            u = response.usage
+            # Distinguish shapes by which field EXISTS: chat-completions has
+            # prompt_tokens/completion_tokens; the Responses API has
+            # input_tokens/output_tokens. Checking existence (not value) keeps the
+            # chat-completions None->0 semantics while still reading usage for
+            # responses-API models (previously always zero for them).
+            if hasattr(u, "prompt_tokens"):
+                usage["input_tokens"] = getattr(u, "prompt_tokens", 0) or 0
+                usage["output_tokens"] = getattr(u, "completion_tokens", 0) or 0
+                usage["total_tokens"] = getattr(u, "total_tokens", 0) or 0
+            else:
+                input_tokens = getattr(u, "input_tokens", 0) or 0
+                output_tokens = getattr(u, "output_tokens", 0) or 0
+                total_tokens = getattr(u, "total_tokens", 0) or 0
+                usage["input_tokens"] = input_tokens
+                usage["output_tokens"] = output_tokens
+                usage["total_tokens"] = total_tokens or (input_tokens + output_tokens)
 
         return usage
 
@@ -890,8 +970,27 @@ class OpenAICompatibleProvider(ModelProvider):
         """
         error_str = str(error).lower()
 
-        # Check for 429 errors first - these need special handling
-        if "429" in error_str:
+        # Timeouts / connection errors are always retryable regardless of code.
+        if _OpenAITimeoutError is not None and isinstance(error, _OpenAITimeoutError):
+            return True
+        if _OpenAIConnectionError is not None and isinstance(error, _OpenAIConnectionError):
+            return True
+
+        # Prefer a STRUCTURED status code over string matching. Without this, any
+        # error whose message merely contains the digits "429" (token counts,
+        # request IDs, byte sizes) was misrouted into the rate-limit branch and
+        # retried even when it was a permanent 4xx.
+        structured_code = None
+        if _OpenAIStatusError is not None and isinstance(error, _OpenAIStatusError):
+            structured_code = getattr(error, "status_code", None)
+        if not isinstance(structured_code, int):
+            structured_code = self._extract_status_code(error)
+
+        # It is a rate-limit 429 only if the structured code says so; fall back to
+        # the substring heuristic ONLY when no structured status code is available.
+        is_rate_limit = (structured_code == 429) if isinstance(structured_code, int) else ("429" in error_str)
+
+        if is_rate_limit:
             # Try to extract structured error information
             error_type = None
             error_code = None
@@ -949,18 +1048,12 @@ class OpenAICompatibleProvider(ModelProvider):
                 logging.debug(f"Retryable 429: rate limiting (type={error_type}, code={error_code})")
                 return True
 
-        # Tier 1: OpenAI SDK exception classes
-        if _OpenAITimeoutError is not None and isinstance(error, _OpenAITimeoutError):
-            return True
-        if _OpenAIConnectionError is not None and isinstance(error, _OpenAIConnectionError):
-            return True
-        if _OpenAIStatusError is not None and isinstance(error, _OpenAIStatusError):
-            code = getattr(error, "status_code", None)
-            if isinstance(code, int):
-                if code in self._RETRYABLE_STATUS_CODES:
-                    return True
-                if code in self._NON_RETRYABLE_STATUS_CODES:
-                    return False
+        # Non-429 structured status codes.
+        if isinstance(structured_code, int):
+            if structured_code in self._RETRYABLE_STATUS_CODES:
+                return True
+            if structured_code in self._NON_RETRYABLE_STATUS_CODES:
+                return False
 
         # Delegate to base class three-tier classification
         return super()._is_error_retryable(error)

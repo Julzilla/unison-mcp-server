@@ -499,6 +499,27 @@ class ModelProvider(ABC):
                 return val
         return None
 
+    def _is_provider_unhealthy_error(self, error: Exception) -> bool:
+        """Whether *error* indicates the PROVIDER is unhealthy (vs a caller-fault
+        request error), used to decide if a non-retryable failure should trip the
+        circuit breaker.
+
+        Conservative by design: only a positively-identified 4xx caller fault
+        (a structured status code in [400, 500) other than 408/429) is treated as
+        breaker-neutral. Timeouts, connection errors, 5xx, and anything without a
+        clear status code default to "provider unhealthy" so real outages still
+        open the breaker. Subclasses with richer error typing may override.
+        """
+        # Timeouts / connection problems are unambiguously provider-side.
+        if _HttpxTimeoutException is not None and isinstance(error, _HttpxTimeoutException):
+            return True
+        if _HttpxConnectError is not None and isinstance(error, _HttpxConnectError):
+            return True
+        code = self._extract_status_code(error)
+        if code is not None and 400 <= code < 500 and code not in (408, 429):
+            return False
+        return True
+
     def _is_error_retryable(self, error: Exception) -> bool:
         """Three-tier error classification: class hierarchy -> status code -> string fallback."""
 
@@ -602,7 +623,18 @@ class ModelProvider(ABC):
 
                 # Decide whether to retry based on subclass hook
                 retryable = self._is_error_retryable(exc)
-                if not retryable or attempt_number >= attempts:
+                if not retryable:
+                    # A non-retryable error may be a caller-fault request error
+                    # (400/404/422, bad image, context-length) rather than a
+                    # provider-health problem. Only trip the breaker for the
+                    # latter, so a run of bad requests cannot lock out a healthy
+                    # provider.
+                    if self._is_provider_unhealthy_error(exc):
+                        self._circuit_breaker.record_failure()
+                    raise
+                if attempt_number >= attempts:
+                    # Retryable error that exhausted all attempts => the provider
+                    # really is failing; count it.
                     self._circuit_breaker.record_failure()
                     raise
 
@@ -674,7 +706,11 @@ class ModelProvider(ABC):
                 attempt_number = attempt_index + 1
 
                 retryable = self._is_error_retryable(exc)
-                if not retryable or attempt_number >= max_attempts:
+                if not retryable:
+                    if self._is_provider_unhealthy_error(exc):
+                        self._circuit_breaker.record_failure()
+                    raise
+                if attempt_number >= max_attempts:
                     self._circuit_breaker.record_failure()
                     raise
 

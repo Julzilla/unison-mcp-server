@@ -41,7 +41,9 @@ class AmpJSONLParser(BaseParser):
                 continue
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError):
+                continue
+            if not isinstance(event, dict):
                 continue
 
             events.append(event)
@@ -54,7 +56,9 @@ class AmpJSONLParser(BaseParser):
                         session_id = sid
 
             elif event_type == "assistant":
-                message = event.get("message") or {}
+                message = event.get("message")
+                if not isinstance(message, dict):
+                    message = {}
                 content = message.get("content")
                 if isinstance(content, list):
                     for block in content:

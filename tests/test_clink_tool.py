@@ -203,7 +203,7 @@ async def test_read_only_violations_have_classified_shape(monkeypatch):
             return await fake_run(**kwargs)
 
     monkeypatch.setattr("tools.clink.create_agent", lambda c: DummyAgent())
-    monkeypatch.setattr("tools.clink.capture_snapshot", lambda d: {})
+    monkeypatch.setattr("tools.clink.capture_snapshot", lambda d, **kw: {})
     monkeypatch.setattr("tools.clink.diff_snapshots", lambda a, b: fake_diff)
 
     arguments = {
@@ -217,9 +217,16 @@ async def test_read_only_violations_have_classified_shape(monkeypatch):
     payload = json.loads(result[0].text)
     metadata = payload["metadata"]
 
-    # Shape: nested object with both buckets always present
-    assert metadata["read_only_enforced"] is True
+    # Honest enforcement reporting: the DummyAgent applies no layer-1 sandbox
+    # flag, so read_only_enforced must be False (only prompt + post-hoc diff).
+    assert metadata["read_only_enforced"] is False
     assert metadata["read_only_sandbox_flags"] == []
+    assert metadata["read_only_enforcement"] == {
+        "sandbox_flags": False,
+        "prompt_instruction": True,
+        "post_execution_verification": True,
+    }
+    assert metadata["read_only_verification_coverage"] == "working_dir_subtree"
     violations = metadata["read_only_violations"]
     assert isinstance(violations, dict)
     assert "by_model" in violations
@@ -275,7 +282,7 @@ async def test_warning_logged_only_for_model_driven_violations(monkeypatch, capl
             return await fake_run(**kwargs)
 
     monkeypatch.setattr("tools.clink.create_agent", lambda c: DummyAgent())
-    monkeypatch.setattr("tools.clink.capture_snapshot", lambda d: {})
+    monkeypatch.setattr("tools.clink.capture_snapshot", lambda d, **kw: {})
     monkeypatch.setattr("tools.clink.diff_snapshots", lambda a, b: bookkeeping_only)
 
     arguments = {

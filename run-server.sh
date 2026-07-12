@@ -1226,6 +1226,13 @@ parse_env_variables() {
 # Claude Integration Functions
 # ----------------------------------------------------------------------------
 
+# Mask API-key values inside a rendered `-e KEY="value"` argument string so the
+# command can be printed to the terminal/logs without leaking secrets. The real
+# (unmasked) command is still what gets executed via eval.
+mask_secret_args() {
+    echo "$1" | sed -E 's/(-e [^=]+=")[^"]*(")/\1***\2/g'
+}
+
 # Check if MCP is added to Claude CLI and verify it's correct
 check_claude_cli_integration() {
     local python_cmd="$1"
@@ -1304,7 +1311,7 @@ check_claude_cli_integration() {
                 echo ""
                 echo "Failed to update MCP registration. Please run manually:"
                 echo "  claude mcp remove unison -s user"
-                echo "  $claude_cmd"
+                echo "  $(mask_secret_args "$claude_cmd")"
                 return 1
             fi
         else
@@ -1335,7 +1342,7 @@ check_claude_cli_integration() {
                 echo ""
                 echo "Failed to update MCP registration. Please run manually:"
                 echo "  claude mcp remove unison -s user"
-                echo "  $claude_cmd"
+                echo "  $(mask_secret_args "$claude_cmd")"
                 return 1
             fi
         fi
@@ -1358,7 +1365,7 @@ check_claude_cli_integration() {
             fi
             
             print_info "To add manually later, run:"
-            echo "  claude mcp add unison -s user$env_args -- $python_cmd $server_path"
+            echo "  $(mask_secret_args "claude mcp add unison -s user$env_args -- $python_cmd $server_path")"
             return 0
         fi
 
@@ -1384,7 +1391,7 @@ check_claude_cli_integration() {
         else
             echo ""
             echo "Failed to add automatically. To add manually, run:"
-            echo "  $claude_cmd"
+            echo "  $(mask_secret_args "$claude_cmd")"
             return 1
         fi
     fi
@@ -2363,7 +2370,7 @@ display_config_instructions() {
             fi
         done <<< "$env_vars"
     fi
-    echo -e "   ${GREEN}claude mcp add unison -s user$env_args -- $python_cmd $server_path${NC}"
+    echo -e "   ${GREEN}$(mask_secret_args "claude mcp add unison -s user$env_args -- $python_cmd $server_path")${NC}"
     echo ""
 
     print_info "2. For Claude Desktop:"

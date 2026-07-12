@@ -67,11 +67,30 @@ class TestClaudeAgentReadOnly:
 
 
 class TestCodexAgentReadOnly:
-    def test_returns_empty_list(self):
-        """Codex exec has no read-only flag; enforcement via prompt."""
+    def test_returns_sandbox_read_only(self):
+        """Codex exec supports --sandbox read-only; use it as layer-1 enforcement."""
         agent = CodexAgent(_make_mock_client("codex"))
         args = agent.get_read_only_args()
-        assert args == []
+        assert args == ["--sandbox", "read-only"]
+
+    def test_apply_read_only_strips_dangerous_bypass_flag(self):
+        """The manifest's --dangerously-bypass-approvals-and-sandbox must be removed
+        so read_only=True does not run Codex fully unsandboxed."""
+        agent = CodexAgent(_make_mock_client("codex"))
+        cmd = ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox"]
+        result = agent._apply_read_only(cmd)
+        assert "--dangerously-bypass-approvals-and-sandbox" not in result
+        assert result[-2:] == ["--sandbox", "read-only"]
+
+    def test_apply_read_only_strips_conflicting_sandbox_pair(self):
+        """A pre-existing --sandbox <mode> pair is replaced, not duplicated."""
+        agent = CodexAgent(_make_mock_client("codex"))
+        cmd = ["codex", "exec", "--sandbox", "workspace-write", "--full-auto"]
+        result = agent._apply_read_only(cmd)
+        assert "workspace-write" not in result
+        assert "--full-auto" not in result
+        assert result.count("--sandbox") == 1
+        assert result[-2:] == ["--sandbox", "read-only"]
 
 
 class TestOpencodeAgentReadOnly:

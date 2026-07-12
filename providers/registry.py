@@ -227,7 +227,15 @@ class ModelProviderRegistry:
         restriction_service = get_restriction_service() if respect_restrictions else None
         models: dict[str, ProviderType] = {}
 
-        for provider_type in self._providers:
+        # Iterate in routing-priority order and use setdefault so that, on a model
+        # name collision, the highest-priority provider wins -- matching how
+        # get_provider_for_model() actually routes. Previously this iterated in
+        # registration order with last-write-wins, which could attribute a name to
+        # the wrong (lowest-priority) provider.
+        ordered_types = [pt for pt in self.PROVIDER_PRIORITY_ORDER if pt in self._providers]
+        ordered_types += [pt for pt in self._providers if pt not in self.PROVIDER_PRIORITY_ORDER]
+
+        for provider_type in ordered_types:
             provider = self.get_provider(provider_type)
             if not provider:
                 continue
@@ -247,7 +255,7 @@ class ModelProviderRegistry:
                 )
                 if restricted_display:
                     for model_name in restricted_display:
-                        models[model_name] = provider_type
+                        models.setdefault(model_name, provider_type)
                     continue
 
             for model_name in available:
@@ -268,7 +276,7 @@ class ModelProviderRegistry:
                 ):
                     logging.debug("Model %s filtered by restrictions", model_name)
                     continue
-                models[model_name] = provider_type
+                models.setdefault(model_name, provider_type)
 
         return models
 

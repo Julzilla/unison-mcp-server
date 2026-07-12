@@ -56,7 +56,9 @@ class StreamProgressNotifier:
         self._min_chunk_size = min_chunk_size
 
         self._buffer: str = ""
-        self._last_notify_time: float = time.monotonic()
+        # Offset so the FIRST non-final chunk is not blocked by the interval floor
+        # (first send passes, subsequent sends are throttled to min_interval).
+        self._last_notify_time: float = time.monotonic() - self._min_interval
         self._chunks_sent: int = 0
         self._total_progress: float = 0.0
 
@@ -81,7 +83,13 @@ class StreamProgressNotifier:
 
         now = time.monotonic()
         elapsed = now - self._last_notify_time
-        if len(self._buffer) >= self._min_chunk_size or elapsed >= self._min_interval:
+        # Send a non-final notification only when BOTH the wall-clock interval has
+        # elapsed AND enough content has accumulated. Requiring the interval as a
+        # hard floor (not an OR) prevents a fast/bursty stream from emitting a
+        # flurry of back-to-back notifications even when the size threshold is met;
+        # requiring the size avoids tiny sends. The final chunk (handled above)
+        # always flushes regardless.
+        if elapsed >= self._min_interval and len(self._buffer) >= self._min_chunk_size:
             await self._flush(is_final=False)
 
     async def notify_complete(self, total_text: str) -> None:

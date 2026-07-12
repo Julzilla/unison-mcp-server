@@ -19,8 +19,16 @@ class GeminiJSONParser(BaseParser):
 
         try:
             payload: dict[str, Any] = json.loads(stdout)
-        except json.JSONDecodeError as exc:  # pragma: no cover - defensive logging
+        except (json.JSONDecodeError, RecursionError) as exc:  # pragma: no cover - defensive logging
             raise ParserError(f"Failed to decode Gemini CLI JSON output: {exc}") from exc
+
+        # Untrusted CLI output may be any valid JSON. A non-object (array, string,
+        # number, null) would make the .get() calls below raise AttributeError,
+        # which escapes the ParserError->CLIAgentError contract.
+        if not isinstance(payload, dict):
+            raise ParserError(
+                f"Gemini CLI returned unexpected JSON payload of type {type(payload).__name__}; expected object"
+            )
 
         response = payload.get("response")
         response_text = response.strip() if isinstance(response, str) else ""

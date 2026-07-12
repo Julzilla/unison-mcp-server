@@ -25,14 +25,16 @@ class CodexJSONLParser(BaseParser):
                 continue
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError):
+                continue
+            if not isinstance(event, dict):
                 continue
 
             events.append(event)
             event_type = event.get("type")
             if event_type == "item.completed":
-                item = event.get("item") or {}
-                if item.get("type") == "agent_message":
+                item = event.get("item")
+                if isinstance(item, dict) and item.get("type") == "agent_message":
                     text = item.get("text")
                     if isinstance(text, str) and text.strip():
                         agent_messages.append(text.strip())

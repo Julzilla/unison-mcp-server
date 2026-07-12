@@ -105,7 +105,7 @@ clink with claude codereviewer in read-only mode to review PR #482
 | CLI | Strengths | Read-only flag |
 |---|---|---|
 | `gemini` | Long-context analysis, free tier, web search | `--approval-mode plan` |
-| `codex` | OpenAI-hosted reasoning models, web search via tool | prompt-only |
+| `codex` | OpenAI-hosted reasoning models, web search via tool | `--sandbox read-only` (native) |
 | `claude` | Anthropic models with strong agentic behavior | `--permission-mode plan` |
 | `opencode` | **75+ providers** behind one CLI (OpenAI, Anthropic, Google, Ollama, OpenRouter, xAI, Mistral, Groq, …) via `provider/model` syntax | _(none — see note)_ |
 | `aider` | Largest AI-CLI userbase, git-integrated diff-edit workflow, multi-provider via standard env keys | `--dry-run` (native) |
@@ -264,7 +264,7 @@ Unison inherits the entire PAL feature set. Every row below is an addition or ha
 | Capability | PAL MCP | Unison MCP |
 |---|---|---|
 | **CLI-to-CLI orchestration** | — | **`clink`** spawns **7 CLIs** as subagents — Claude, Codex, Gemini, opencode, Aider, Crush, Amp — with role presets (`planner`, `codereviewer`), optional `supported_models` allowlist per CLI, and a cross-cutting recursion guard for MCP-aware targets |
-| **Read-only mode for sub-CLIs** | — | Native CLI flags (`--approval-mode plan`, `--permission-mode plan`) + prompt instruction + post-call filesystem-snapshot diff; CLI bookkeeping (e.g. `.opencode/`) classified separately so it doesn't drown out genuine model writes |
+| **Read-only mode for sub-CLIs** | — | Native CLI flags (`--sandbox read-only`, `--approval-mode plan`, `--permission-mode plan`, `--dry-run`) + prompt instruction + full-tree post-call filesystem-snapshot diff; `read_only_enforced` metadata reflects whether a real sandbox flag was applied; CLI bookkeeping (e.g. `.opencode/`) classified separately so it doesn't drown out genuine model writes |
 | **Provider reach via one integration** | One provider per implementation | **75+ providers** through opencode via `provider/model` syntax (OpenAI, Anthropic, Google, Ollama, OpenRouter, xAI, Mistral, Groq, DeepSeek, …) |
 | **Model catalog** | Static JSON files, manually curated — go stale the day a provider ships a new model | **2000+ models auto-discovered** via [LiteLLM](https://github.com/BerriAI/litellm) at startup, with curated overrides for tuned metadata |
 | **Discovered vs curated** | All models treated equally | `listmodels` distinguishes curated (hand-tuned `intelligence_score`, aliases) from auto-discovered |

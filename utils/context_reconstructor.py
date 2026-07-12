@@ -22,6 +22,14 @@ from utils.conversation_store import MAX_CONVERSATION_TURNS, ConversationTurn, T
 
 logger = logging.getLogger(__name__)
 
+# Header that marks a server-embedded conversation history block. Exported as a
+# shared constant so consumers (e.g. tools/simple/base.py) can reliably detect
+# pre-embedded history instead of hard-coding a substring that can drift.
+CONVERSATION_HISTORY_HEADER = "=== CONVERSATION HISTORY (CONTINUATION) ==="
+# Prefix common to any conversation-history header variant; use for membership
+# checks so a future header change ("(CONTINUATION)" etc.) still matches.
+CONVERSATION_HISTORY_HEADER_PREFIX = "=== CONVERSATION HISTORY"
+
 
 def get_conversation_file_list(context: ThreadContext) -> list[str]:
     """
@@ -454,7 +462,7 @@ def build_conversation_history(
     logger.debug(f"[HISTORY]   Max history tokens: {max_history_tokens:,}")
 
     history_parts = [
-        "=== CONVERSATION HISTORY (CONTINUATION) ===",
+        CONVERSATION_HISTORY_HEADER,
         f"Thread: {context.thread_id}",
         f"Tool: {context.tool_name}",  # Original tool that started the conversation
         f"Turn {total_turns}/{MAX_CONVERSATION_TURNS}",

@@ -19,7 +19,7 @@ class ClaudeJSONParser(BaseParser):
 
         try:
             loaded = json.loads(stdout)
-        except json.JSONDecodeError as exc:  # pragma: no cover - defensive logging
+        except (json.JSONDecodeError, RecursionError) as exc:  # pragma: no cover - defensive logging
             raise ParserError(f"Failed to decode Claude CLI JSON output: {exc}") from exc
 
         events: list[dict[str, Any]] | None = None

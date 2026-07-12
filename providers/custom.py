@@ -33,6 +33,10 @@ class CustomProvider(OpenAICompatibleProvider):
 
     # Model registry for managing configurations and aliases
     _registry: CustomEndpointModelRegistry | None = None
+    # Shared OpenRouter registry used only for alias fallback on unknown models.
+    # Cached at class level so a stream of unknown model names does not rebuild
+    # the large LiteLLM-backed catalog on every resolution.
+    _openrouter_registry: OpenRouterModelRegistry | None = None
 
     def __init__(self, api_key: str = "", base_url: str = "", **kwargs):
         """Initialize Custom provider for local/self-hosted models.
@@ -151,8 +155,11 @@ class CustomProvider(OpenAICompatibleProvider):
             return base_model
 
         logging.debug(f"Model '{model_name}' not found in registry, using as-is")
-        # Attempt to resolve via OpenRouter registry so aliases still map cleanly
-        openrouter_registry = OpenRouterModelRegistry()
+        # Attempt to resolve via OpenRouter registry so aliases still map cleanly.
+        # Reuse a cached registry instance rather than rebuilding it per lookup.
+        if CustomProvider._openrouter_registry is None:
+            CustomProvider._openrouter_registry = OpenRouterModelRegistry()
+        openrouter_registry = CustomProvider._openrouter_registry
         openrouter_config = openrouter_registry.resolve(model_name)
         if openrouter_config:
             resolved = openrouter_config.model_name

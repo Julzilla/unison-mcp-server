@@ -89,7 +89,12 @@ class DIALModelProvider(RegistryBackedProviderMixin, OpenAICompatibleProvider):
         self._http_client = httpx.Client(
             timeout=self.timeout_config,
             verify=True,
-            follow_redirects=True,
+            # Do NOT follow redirects: the credential travels in a custom "Api-Key"
+            # header baked into this client, and httpx only strips *standard* auth
+            # headers (Authorization/Cookie) on a cross-origin redirect -- a custom
+            # header would leak to the redirect target. API endpoints should not
+            # redirect; a 3xx will surface as an error instead.
+            follow_redirects=False,
             headers=self.DEFAULT_HEADERS.copy(),  # Include DIAL headers including Api-Key
             limits=httpx.Limits(
                 max_keepalive_connections=5,

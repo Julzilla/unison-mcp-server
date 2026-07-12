@@ -380,6 +380,18 @@ class GeminiModelProvider(RegistryBackedProviderMixin, ModelProvider):
                 actual_thinking_budget = int(max_thinking_tokens * self.THINKING_BUDGETS[effective_thinking_mode])
                 generation_config.thinking_config = types.ThinkingConfig(thinking_budget=actual_thinking_budget)
 
+        # Circuit breaker: fail fast if the provider is known-down, and record the
+        # outcome so streaming failures/successes update breaker health (the
+        # streaming path bypasses _run_with_retries, which is where the breaker is
+        # otherwise enforced).
+        if not self._circuit_breaker.allow_request():
+            from utils.circuit_breaker import ProviderUnavailable
+
+            raise ProviderUnavailable(
+                provider_name=self._circuit_breaker._provider_name,
+                circuit_state=self._circuit_breaker.state.value,
+            )
+
         try:
             stream_response = self.client.models.generate_content_stream(
                 model=resolved_model_name,
@@ -387,28 +399,43 @@ class GeminiModelProvider(RegistryBackedProviderMixin, ModelProvider):
                 config=generation_config,
             )
 
-            chunks_list = list(stream_response)
-            if not chunks_list:
+            # Iterate incrementally (no list() materialization) so chunks are
+            # yielded to the consumer as they arrive; a single-chunk lookahead
+            # lets us tag the final chunk and attach usage. Buffering the whole
+            # stream here would defeat any live-progress consumer downstream.
+            prev_chunk = None
+            has_prev = False
+            for chunk in stream_response:
+                if has_prev:
+                    yield StreamChunk(text=self._safe_chunk_text(prev_chunk), is_final=False)
+                prev_chunk = chunk
+                has_prev = True
+
+            # The stream was consumed without raising -> provider is healthy.
+            self._circuit_breaker.record_success()
+
+            if has_prev:
+                yield StreamChunk(
+                    text=self._safe_chunk_text(prev_chunk),
+                    is_final=True,
+                    usage=self._extract_usage(prev_chunk),
+                )
+            else:
                 yield StreamChunk(text="", is_final=True, usage={})
-                return
-
-            for i, chunk in enumerate(chunks_list):
-                is_last = i == len(chunks_list) - 1
-                chunk_text = ""
-                try:
-                    chunk_text = chunk.text or ""
-                except (AttributeError, ValueError):
-                    pass
-
-                if is_last:
-                    usage = self._extract_usage(chunk)
-                    yield StreamChunk(text=chunk_text, is_final=True, usage=usage)
-                else:
-                    yield StreamChunk(text=chunk_text, is_final=False)
 
         except Exception as exc:
+            if self._is_provider_unhealthy_error(exc):
+                self._circuit_breaker.record_failure()
             error_msg = f"Gemini streaming error for model {resolved_model_name}: {exc}"
             raise RuntimeError(error_msg) from exc
+
+    @staticmethod
+    def _safe_chunk_text(chunk) -> str:
+        """Extract text from a Gemini stream chunk, tolerating chunks with none."""
+        try:
+            return chunk.text or ""
+        except (AttributeError, ValueError):
+            return ""
 
     def get_provider_type(self) -> ProviderType:
         """Get the provider type."""

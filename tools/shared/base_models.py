@@ -132,6 +132,34 @@ class WorkflowRequest(BaseWorkflowRequest):
             return []
         return v
 
+    @field_validator("issues_found", mode="before")
+    @classmethod
+    def normalize_issues_found(cls, v):
+        """Coerce each issue's key fields to strings and drop non-dict entries.
+
+        issues_found is typed ``list[dict]`` with no item validation, so a client
+        can send arbitrary shapes. Downstream summary/expert-context builders call
+        ``issue.get("severity", "unknown").upper()``; a None or non-string
+        severity would raise AttributeError. Normalize here so those builders are
+        always given strings.
+        """
+        if not isinstance(v, list):
+            return []
+        normalized: list[dict] = []
+        for item in v:
+            if not isinstance(item, dict):
+                continue
+            norm = dict(item)
+            for key in ("severity", "description", "type"):
+                if key in norm and norm[key] is not None and not isinstance(norm[key], str):
+                    norm[key] = str(norm[key])
+            # `.get("severity", "unknown")` returns None (not the default) when the
+            # key exists with a None value, so force a string here.
+            if norm.get("severity") is None:
+                norm["severity"] = "unknown"
+            normalized.append(norm)
+        return normalized
+
 
 class ConsolidatedFindings(BaseModel):
     """

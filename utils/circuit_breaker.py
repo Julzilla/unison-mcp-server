@@ -68,6 +68,7 @@ class CircuitBreaker:
         self._last_failure_time: float | None = None
         self._opened_at: float | None = None
         self._half_open_in_flight = 0
+        self._half_open_entered_at: float | None = None
 
         self._lock = threading.Lock()
 
@@ -96,10 +97,24 @@ class CircuitBreaker:
                 if elapsed >= self._reset_timeout_seconds:
                     self._transition(CircuitState.HALF_OPEN)
                     self._half_open_in_flight = 1
+                    self._half_open_entered_at = time.monotonic()
                     return True
                 return False
 
             # HALF_OPEN
+            # Escape hatch: a probe admitted here is only released by an explicit
+            # record_success()/record_failure(). If the caller neither succeeds
+            # nor fails (e.g. it was cancelled), the in-flight slot would leak and
+            # wedge the breaker in HALF_OPEN forever, rejecting all requests.
+            # Reclaim the slot once the reset timeout has elapsed since entering
+            # HALF_OPEN so a fresh probe can proceed.
+            if (
+                self._half_open_entered_at is not None
+                and time.monotonic() - self._half_open_entered_at >= self._reset_timeout_seconds
+            ):
+                self._half_open_in_flight = 0
+                self._half_open_entered_at = time.monotonic()
+
             if self._half_open_in_flight < self._half_open_max_calls:
                 self._half_open_in_flight += 1
                 return True
@@ -112,6 +127,7 @@ class CircuitBreaker:
                 self._transition(CircuitState.CLOSED)
                 self._failure_count = 0
                 self._half_open_in_flight = 0
+                self._half_open_entered_at = None
             elif self._state is CircuitState.CLOSED:
                 self._failure_count = 0
 
@@ -123,6 +139,7 @@ class CircuitBreaker:
             if self._state is CircuitState.HALF_OPEN:
                 self._opened_at = time.monotonic()
                 self._half_open_in_flight = 0
+                self._half_open_entered_at = None
                 self._transition(CircuitState.OPEN)
                 return
 

@@ -269,6 +269,12 @@ class CLinkTool(SimpleTool):
             self._raise_tool_error(str(exc))
 
         requested_model = (request.model or "").strip() or None
+        if requested_model and requested_model.startswith("-"):
+            # A model value beginning with "-" can be interpreted as a CLI flag by
+            # the spawned CLI (or collide with an adjacent flag during read-only
+            # flag stripping), corrupting the command. Real model identifiers never
+            # start with "-".
+            self._raise_tool_error(f"Invalid model '{requested_model}': model identifiers cannot start with '-'.")
         if requested_model and client_config.supported_models:
             if requested_model not in client_config.supported_models:
                 allowed = ", ".join(client_config.supported_models)
@@ -305,7 +311,9 @@ class CLinkTool(SimpleTool):
         read_only = getattr(request, "read_only", False)
         snapshot_dir = str(client_config.working_dir) if client_config.working_dir else "."
         if read_only:
-            pre_snapshot = capture_snapshot(snapshot_dir)
+            # Full-depth, include gitignored/transient so a deep or gitignored
+            # write (e.g. to .env) cannot silently evade read-only verification.
+            pre_snapshot = capture_snapshot(snapshot_dir, include_ignored=True)
 
         agent = create_agent(client_config)
         try:
@@ -330,11 +338,24 @@ class CLinkTool(SimpleTool):
 
         # Post-execution read-only verification
         if read_only and pre_snapshot is not None:
-            post_snapshot = capture_snapshot(snapshot_dir)
+            post_snapshot = capture_snapshot(snapshot_dir, include_ignored=True)
             diff = diff_snapshots(pre_snapshot, post_snapshot)
             sandbox_flags = agent.get_read_only_args()
-            metadata["read_only_enforced"] = True
+            # Report enforcement honestly. `read_only_enforced` reflects whether a
+            # layer-1 CLI/OS sandbox flag was actually applied. When it is empty,
+            # the only enforcement is the prompt instruction plus this best-effort,
+            # detective (not preventive) snapshot diff, which covers the
+            # working-directory subtree only and cannot see command execution or
+            # out-of-tree writes. Do not let an empty diff read as proof of no
+            # side effects.
             metadata["read_only_sandbox_flags"] = sandbox_flags
+            metadata["read_only_enforced"] = bool(sandbox_flags)
+            metadata["read_only_enforcement"] = {
+                "sandbox_flags": bool(sandbox_flags),
+                "prompt_instruction": True,
+                "post_execution_verification": True,
+            }
+            metadata["read_only_verification_coverage"] = "working_dir_subtree"
             by_model, by_bookkeeping = classify_changes(diff, agent.fs_violation_ignore_patterns)
             metadata["read_only_violations"] = {
                 "by_model": by_model.to_dict(),

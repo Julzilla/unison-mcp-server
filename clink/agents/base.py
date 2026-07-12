@@ -8,6 +8,8 @@ import logging
 import os
 import shlex
 import shutil
+import signal
+import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Sequence
@@ -20,6 +22,31 @@ from clink.models import ResolvedCLIClient, ResolvedCLIRole
 from clink.parsers import BaseParser, ParsedCLIResponse, ParserError, get_parser
 
 logger = logging.getLogger("clink.agent")
+
+#: Provider secret env vars that Unison itself consumes. When
+#: ``UNISON_CLINK_STRIP_SECRETS`` is enabled these are withheld from spawned
+#: CLIs (unless a CLI's manifest ``env`` re-declares one it needs), so a
+#: third-party CLI does not receive every configured API key.
+_UNISON_PROVIDER_SECRET_VARS: frozenset[str] = frozenset(
+    {
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "XAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "DIAL_API_KEY",
+        "DIAL_API_HOST",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "CUSTOM_API_KEY",
+        "CUSTOM_API_URL",
+        "MISTRAL_API_KEY",
+        "GROQ_API_KEY",
+        "DEEPSEEK_API_KEY",
+    }
+)
 
 
 def _noop_cleanup() -> None:
@@ -256,6 +283,18 @@ class BaseCLIAgent:
         if cwd:
             self._logger.debug("Working directory: %s", cwd)
 
+        # Launch the CLI in its own process group/session so that on timeout we
+        # can reap the entire tree (agentic CLIs spawn shells/helpers), not just
+        # the immediate child. start_new_session is POSIX-only; on Windows a new
+        # process group is requested via creationflags.
+        spawn_kwargs: dict[str, Any] = {}
+        if os.name == "posix":
+            spawn_kwargs["start_new_session"] = True
+        elif os.name == "nt":  # pragma: no cover - Windows-only
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if creationflags:
+                spawn_kwargs["creationflags"] = creationflags
+
         try:
             process = await asyncio.create_subprocess_exec(
                 *command_with_output_flag,
@@ -265,6 +304,7 @@ class BaseCLIAgent:
                 cwd=cwd,
                 limit=limit,
                 env=env,
+                **spawn_kwargs,
             )
         except FileNotFoundError as exc:
             cleanup_plan()
@@ -276,8 +316,17 @@ class BaseCLIAgent:
                 timeout=self.client.timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.communicate()
+            # Kill the whole process group (not just the direct child) so no
+            # descendants are orphaned, then bound the cleanup drain so a survivor
+            # holding the stdout/stderr pipe cannot make communicate() hang
+            # forever and defeat the timeout.
+            self._terminate_process_tree(process)
+            try:
+                await asyncio.wait_for(process.communicate(), timeout=5)
+            except (asyncio.TimeoutError, ProcessLookupError):
+                pass
+            except Exception:  # pragma: no cover - best-effort drain
+                logger.debug("Ignoring error while draining timed-out CLI '%s'", self.client.name, exc_info=True)
             raise CLIAgentError(
                 f"CLI '{self.client.name}' timed out after {self.client.timeout_seconds} seconds",
                 returncode=None,
@@ -360,8 +409,44 @@ class BaseCLIAgent:
 
         return base
 
+    def _terminate_process_tree(self, process: asyncio.subprocess.Process) -> None:
+        """Best-effort SIGKILL of the subprocess and its entire process group.
+
+        The process is launched with ``start_new_session=True`` (POSIX) so it is
+        the leader of its own group; killing the group reaps descendants the CLI
+        spawned. Falls back to killing just the child if the group signal fails
+        (e.g. the process already exited, or on platforms without ``killpg``).
+        """
+        pid = process.pid
+        try:
+            if os.name == "posix" and hasattr(os, "killpg"):
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                    return
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            process.kill()
+        except ProcessLookupError:
+            pass
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("Failed to terminate CLI '%s' process tree", self.client.name, exc_info=True)
+
     def _build_environment(self) -> dict[str, str]:
         env = os.environ.copy()
+
+        # Security: optionally withhold Unison's own provider secrets from the
+        # spawned third-party CLI. This is opt-in via UNISON_CLINK_STRIP_SECRETS
+        # because several clink targets (opencode, aider, crush) legitimately
+        # route to many providers using these ambient keys, so stripping them
+        # unconditionally would break multi-provider routing. A CLI that needs a
+        # specific key can re-declare it in its manifest ``env`` (kept below).
+        strip_secrets = (os.environ.get("UNISON_CLINK_STRIP_SECRETS", "").strip().lower()) in ("1", "true", "yes")
+        if strip_secrets:
+            keep = set(self.client.env or {})
+            for var in _UNISON_PROVIDER_SECRET_VARS:
+                if var not in keep:
+                    env.pop(var, None)
+
         env.update(self.client.env)
         # Propagate the clink recursion depth (incremented by one) so that any
         # CLI we spawn — if it itself re-invokes Unison via MCP — trips the

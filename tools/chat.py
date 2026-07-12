@@ -231,6 +231,19 @@ class ChatTool(SimpleTool):
                     "Error: 'working_directory_absolute_path' must reference an existing directory. "
                     f"Received: {working_directory}"
                 )
+            # Sandbox the WRITE destination with the same policy applied to reads.
+            # Writing pal_generated.code is more dangerous than reading, so it must
+            # not be held to a weaker standard: refuse dangerous system dirs,
+            # pseudo-filesystems, and the home-directory root.
+            from utils.file_utils import is_home_directory_root
+            from utils.security_config import is_dangerous_path
+
+            resolved_wd = Path(expanded).resolve()
+            if is_dangerous_path(resolved_wd) or is_home_directory_root(resolved_wd):
+                return (
+                    "Error: 'working_directory_absolute_path' resolves to a protected location "
+                    f"({resolved_wd}). Choose a project subdirectory instead."
+                )
         return None
 
     def format_response(self, response: str, request: ChatRequest, model_info: Optional[dict] = None) -> str:
@@ -340,14 +353,21 @@ class ChatTool(SimpleTool):
             raise FileNotFoundError(f"Absolute working directory path '{working_directory}' does not exist")
 
         target_file = target_dir / "pal_generated.code"
-        if target_file.exists():
-            try:
-                target_file.unlink()
-            except OSError as exc:
-                logger.warning("Unable to remove existing pal_generated.code: %s", exc)
-
         content = block if block.endswith("\n") else f"{block}\n"
-        target_file.write_text(content, encoding="utf-8")
+
+        # Write without following symlinks. O_NOFOLLOW makes open() fail if the
+        # final path component is a symlink, so a planted `pal_generated.code`
+        # symlink (CWE-59) cannot redirect the write to an arbitrary file, and
+        # there is no unlink->write TOCTOU window. O_TRUNC replaces the content
+        # of an existing regular file in place; we never fall through to a write
+        # after an ambiguous/failed open.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(target_file, flags, 0o600)
+        except OSError as exc:
+            raise OSError(f"Refused to write pal_generated.code at '{target_file}': {exc}") from exc
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
         logger.info("Generated code artifact written to %s", target_file)
         return target_file
 

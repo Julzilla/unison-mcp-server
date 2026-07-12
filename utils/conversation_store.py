@@ -124,6 +124,12 @@ def _is_valid_uuid(val: str) -> bool:
     Returns:
         bool: True if valid UUID format, False otherwise
     """
+    # uuid.UUID() raises ValueError on a malformed string but AttributeError/
+    # TypeError on a non-string (int/list/dict). Guard the type so a non-string
+    # continuation_id (which can reach here via loosely-schema'd or unregistered
+    # tools) returns False cleanly instead of raising past the caller's guards.
+    if not isinstance(val, str):
+        return False
     try:
         uuid.UUID(val)
         return True
@@ -277,16 +283,6 @@ def add_turn(
     """
     logger.debug(f"[FLOW] Adding {role} turn to {thread_id} ({tool_name})")
 
-    context = get_thread(thread_id)
-    if not context:
-        logger.debug(f"[FLOW] Thread {thread_id} not found for turn addition")
-        return False
-
-    # Check turn limit to prevent runaway conversations
-    if len(context.turns) >= MAX_CONVERSATION_TURNS:
-        logger.debug(f"[FLOW] Thread {thread_id} at max turns ({MAX_CONVERSATION_TURNS})")
-        return False
-
     # Create new turn with complete metadata
     turn = ConversationTurn(
         role=role,
@@ -300,13 +296,52 @@ def add_turn(
         model_metadata=model_metadata,  # Additional model info
     )
 
+    storage = get_storage()
+    key = f"thread:{thread_id}"
+
+    # Prefer an atomic read-modify-write when the backend provides one (SQLite).
+    # A plain get_thread()->append->setex is a non-atomic RMW: two processes
+    # sharing one SQLite DB can interleave and lose a turn. The atomic path does
+    # the load, limit check, append and store under a single BEGIN IMMEDIATE.
+    # Gate on the concrete SQLite type (not duck-typing) so test doubles and the
+    # in-memory backend deterministically use the plain fallback below.
+    from utils.sqlite_storage import SQLiteStorageBackend
+
+    if isinstance(storage, SQLiteStorageBackend):
+
+        def _mutate(current_json: Optional[str]) -> Optional[str]:
+            if not current_json:
+                logger.debug(f"[FLOW] Thread {thread_id} not found for turn addition")
+                return None
+            ctx = ThreadContext.model_validate_json(current_json)
+            if len(ctx.turns) >= MAX_CONVERSATION_TURNS:
+                logger.debug(f"[FLOW] Thread {thread_id} at max turns ({MAX_CONVERSATION_TURNS})")
+                return None
+            ctx.turns.append(turn)
+            ctx.last_updated_at = datetime.now(timezone.utc).isoformat()
+            return ctx.model_dump_json()
+
+        try:
+            return bool(storage.atomic_update(key, CONVERSATION_TIMEOUT_SECONDS, _mutate))
+        except Exception as e:
+            logger.debug(f"[FLOW] Failed atomic add_turn to storage: {type(e).__name__}")
+            return False
+
+    # Fallback non-atomic RMW (safe within a single process: no await between
+    # the read and write, and all callers run on the event-loop thread).
+    context = get_thread(thread_id)
+    if not context:
+        logger.debug(f"[FLOW] Thread {thread_id} not found for turn addition")
+        return False
+
+    if len(context.turns) >= MAX_CONVERSATION_TURNS:
+        logger.debug(f"[FLOW] Thread {thread_id} at max turns ({MAX_CONVERSATION_TURNS})")
+        return False
+
     context.turns.append(turn)
     context.last_updated_at = datetime.now(timezone.utc).isoformat()
 
-    # Save back to storage and refresh TTL
     try:
-        storage = get_storage()
-        key = f"thread:{thread_id}"
         storage.setex(key, CONVERSATION_TIMEOUT_SECONDS, context.model_dump_json())  # Refresh TTL to configured timeout
         return True
     except Exception as e:

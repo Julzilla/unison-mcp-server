@@ -12,6 +12,7 @@ and inherit all the conversation, file processing, and model handling
 capabilities from BaseTool.
 """
 
+import asyncio
 from abc import abstractmethod
 from typing import Any, Optional
 
@@ -333,10 +334,26 @@ class SimpleTool(BaseTool):
 
             # Handle conversation history and prompt preparation
             if continuation_id:
-                # Check if conversation history is already embedded
+                # Determine whether the MCP boundary already reconstructed and
+                # embedded the conversation history into the prompt. Two signals:
+                #  1. The server-injected execution context carries the original
+                #     user prompt (authoritative proof reconstruct_thread_context
+                #     ran and already recorded the user turn), and
+                #  2. the prompt actually contains the history header.
+                # The previous check hard-coded "=== CONVERSATION HISTORY ===",
+                # which never matched the real header
+                # "=== CONVERSATION HISTORY (CONTINUATION) ===", so every
+                # server-routed continuation double-recorded the turn and nested
+                # the history. Match on the shared prefix constant instead.
+                from utils.context_reconstructor import CONVERSATION_HISTORY_HEADER_PREFIX
+
                 field_value = self.get_request_prompt(request)
-                if "=== CONVERSATION HISTORY ===" in field_value:
-                    # Use pre-embedded history
+                server_embedded_history = (_exec_ctx is not None and bool(_exec_ctx.original_user_prompt)) or (
+                    CONVERSATION_HISTORY_HEADER_PREFIX in field_value
+                )
+                if server_embedded_history:
+                    # Use pre-embedded history; the user turn was already recorded
+                    # during boundary reconstruction, so do NOT add it again.
                     prompt = field_value
                     logger.debug(f"{self.get_name()}: Using pre-embedded conversation history")
                 else:
@@ -445,7 +462,13 @@ class SimpleTool(BaseTool):
             supports_thinking = capabilities.supports_extended_thinking
 
             # Generate content with provider abstraction
-            model_response = provider.generate_content(
+            # Offload the blocking provider HTTP call (plus its time.sleep retry
+            # backoff) to a worker thread so the event loop is not frozen for
+            # every concurrent request. to_thread(generate_content) is used rather
+            # than async_generate_content so callers/tests that stub the sync
+            # method continue to work.
+            model_response = await asyncio.to_thread(
+                provider.generate_content,
                 prompt=prompt,
                 model_name=self._current_model_name,
                 system_prompt=system_prompt,
@@ -502,7 +525,8 @@ class SimpleTool(BaseTool):
                         retry_prompt = f"{original_prompt}\n\nIMPORTANT: Please provide a substantive response. If you cannot respond to the above request, please explain why and suggest alternatives."
 
                         try:
-                            retry_response = provider.generate_content(
+                            retry_response = await asyncio.to_thread(
+                                provider.generate_content,
                                 prompt=retry_prompt,
                                 model_name=self._current_model_name,
                                 system_prompt=system_prompt,

@@ -19,9 +19,10 @@ class TestCaptureSnapshot:
     def test_captures_mtime_and_size(self, tmp_path):
         (tmp_path / "file.txt").write_text("12345")
         snap = capture_snapshot(tmp_path)
-        mtime_ns, size = snap["file.txt"]
+        mtime_ns, ctime_ns, size = snap["file.txt"]
         assert size == 5
         assert mtime_ns > 0
+        assert ctime_ns > 0
 
     def test_respects_max_depth(self, tmp_path):
         deep = tmp_path / "a" / "b" / "c" / "d"

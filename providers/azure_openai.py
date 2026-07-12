@@ -233,7 +233,13 @@ class AzureOpenAIProvider(OpenAICompatibleProvider):
     def client(self):  # type: ignore[override]
         """Instantiate the Azure OpenAI client on first use."""
 
-        if self._client is None:
+        if self._client is not None:
+            return self._client
+        with self._client_init_lock:
+            # Double-checked locking: serialize construction and the global
+            # os.environ proxy suppression against concurrent dispatch.
+            if self._client is not None:
+                return self._client
             if AzureOpenAI is None:
                 raise ImportError(
                     "Azure OpenAI support requires the 'openai' package. Install it with `pip install openai`."

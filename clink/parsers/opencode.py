@@ -34,7 +34,7 @@ class OpencodeJSONLParser(BaseParser):
                 continue
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError):
                 continue
             if not isinstance(event, dict):
                 continue

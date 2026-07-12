@@ -7,10 +7,48 @@ MCP activity logger, and log directory creation.
 
 import logging
 import os
+import re
 import sys
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+# (pattern, replacement) pairs used to scrub credential-shaped substrings from
+# log records before they are written. Defense-in-depth: individual call sites
+# should already avoid logging secrets, but LOG_LEVEL can be DEBUG and reviewed
+# code/model output may contain credentials.
+_SECRET_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"sk-[A-Za-z0-9_\-]{16,}"), "***REDACTED***"),  # OpenAI-style
+    (re.compile(r"xai-[A-Za-z0-9]{16,}"), "***REDACTED***"),  # xAI
+    (re.compile(r"AIza[0-9A-Za-z_\-]{20,}"), "***REDACTED***"),  # Google
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "***REDACTED***"),  # AWS access key id
+    (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), "***REDACTED***"),  # GitHub
+    (re.compile(r"Bearer\s+[A-Za-z0-9._\-]{16,}", re.IGNORECASE), "Bearer ***REDACTED***"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "-----BEGIN PRIVATE KEY (REDACTED)-----"),
+    (
+        re.compile(r"((?:api[_-]?key|token|secret|password)\s*[=:]\s*)([^\s'\"]{8,})", re.IGNORECASE),
+        r"\1***REDACTED***",
+    ),
+]
+
+
+class RedactingFilter(logging.Filter):
+    """Redact credential-shaped substrings from log messages (CWE-532)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        redacted = message
+        for pattern, replacement in _SECRET_PATTERNS:
+            redacted = pattern.sub(replacement, redacted)
+        if redacted != message:
+            # Collapse args into the already-redacted message so re-formatting
+            # cannot reintroduce the secret.
+            record.msg = redacted
+            record.args = ()
+        return True
 
 
 class LocalTimeFormatter(logging.Formatter):
@@ -34,7 +72,7 @@ def configure_logging(log_level: str = None) -> tuple[logging.Logger, logging.Lo
 
     Args:
         log_level: Log level string (DEBUG, INFO, WARNING, ERROR).
-                   Defaults to LOG_LEVEL env var or DEBUG.
+                   Defaults to LOG_LEVEL env var or INFO.
 
     Returns:
         Tuple of (server_logger, mcp_activity_logger)
@@ -42,9 +80,11 @@ def configure_logging(log_level: str = None) -> tuple[logging.Logger, logging.Lo
     from utils.env import get_env
 
     if log_level is None:
-        log_level = (get_env("LOG_LEVEL", "DEBUG") or "DEBUG").upper()
+        log_level = (get_env("LOG_LEVEL", "INFO") or "INFO").upper()
 
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+    redacting_filter = RedactingFilter()
 
     # Clear any existing handlers first
     root_logger = logging.getLogger()
@@ -54,6 +94,7 @@ def configure_logging(log_level: str = None) -> tuple[logging.Logger, logging.Lo
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setLevel(getattr(logging, log_level, logging.INFO))
     stderr_handler.setFormatter(LocalTimeFormatter(log_format))
+    stderr_handler.addFilter(redacting_filter)
     root_logger.addHandler(stderr_handler)
 
     # Set root logger level
@@ -74,6 +115,7 @@ def configure_logging(log_level: str = None) -> tuple[logging.Logger, logging.Lo
         )
         file_handler.setLevel(getattr(logging, log_level, logging.INFO))
         file_handler.setFormatter(LocalTimeFormatter(log_format))
+        file_handler.addFilter(redacting_filter)
         logging.getLogger().addHandler(file_handler)
 
         # Create a special logger for MCP activity tracking with size-based rotation
@@ -86,6 +128,7 @@ def configure_logging(log_level: str = None) -> tuple[logging.Logger, logging.Lo
         )
         mcp_file_handler.setLevel(logging.INFO)
         mcp_file_handler.setFormatter(LocalTimeFormatter("%(asctime)s - %(message)s"))
+        mcp_file_handler.addFilter(redacting_filter)
         mcp_activity_logger.addHandler(mcp_file_handler)
         mcp_activity_logger.setLevel(logging.INFO)
         # Ensure MCP activity also goes to stderr
