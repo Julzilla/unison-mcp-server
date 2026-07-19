@@ -72,8 +72,10 @@ class KimiAgent(BaseCLIAgent):
            including one that matches ``KIMI_MODEL_NAME`` exactly. Those vars
            synthesize a provider in memory and write nothing to ``config.toml``,
            so there is no model table to resolve against. Omit the model and
-           select it with ``KIMI_MODEL_NAME`` instead, where the API model
-           strings (``k3``, or ``k3[1m]`` for the 1M window) do apply.
+           select it with ``KIMI_MODEL_NAME`` instead, which takes API model
+           IDs from ``GET api.kimi.com/coding/v1/models`` — ``k3`` (1048576
+           context), ``kimi-for-coding`` and ``kimi-for-coding-highspeed``
+           (262144). Entitlement is per-account, so query rather than assume.
 
         Because valid keys are per-user, the manifest ships no
         ``supported_models`` allowlist — a fixed list would reject working
