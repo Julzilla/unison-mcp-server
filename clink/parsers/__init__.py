@@ -9,6 +9,7 @@ from .claude import ClaudeJSONParser
 from .codex import CodexJSONLParser
 from .crush import CrushTextParser
 from .gemini import GeminiJSONParser
+from .kimi import KimiJSONLParser
 from .opencode import OpencodeJSONLParser
 
 _PARSER_CLASSES: dict[str, type[BaseParser]] = {
@@ -19,6 +20,7 @@ _PARSER_CLASSES: dict[str, type[BaseParser]] = {
     AiderTextParser.name: AiderTextParser,
     CrushTextParser.name: CrushTextParser,
     AmpJSONLParser.name: AmpJSONLParser,
+    KimiJSONLParser.name: KimiJSONLParser,
 }
 
 
