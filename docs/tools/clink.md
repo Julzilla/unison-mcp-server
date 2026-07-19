@@ -147,6 +147,7 @@ Clink configurations live in `conf/cli_clients/`. We ship presets for the suppor
 | `aider` | `aider --no-pretty --no-stream --no-auto-commits --yes-always` | `--dry-run` (native) | stable |
 | `crush` | `crush run --quiet` | prompt-only + filesystem snapshot | evolving |
 | `amp` | `amp --execute --stream-json` | prompt-only + filesystem snapshot | new |
+| `kimi` | `kimi --prompt <text> --output-format stream-json` | prompt-only + filesystem snapshot | new |
 
 **Stability tiers:** `stable` = proven upstream, infrequent flag changes. `evolving` = active development, flags may rev. `new` = recently released, expect changes.
 
@@ -177,6 +178,7 @@ Ensure the relevant CLI is installed and configured:
 - [opencode](https://opencode.ai)
 - [Aider](https://aider.chat) — install with `pip install aider-chat` (or `pipx install aider-chat`). Aider uses standard provider API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.) from the environment; clink does not manage Aider's auth.
 - [Crush](https://github.com/charmbracelet/crush) — install with `brew install charmbracelet/tap/crush` (macOS) or see upstream install docs for other platforms. Crush is multi-provider; configure providers per Crush's own docs. Model selection at clink call time uses `provider/model` syntax (e.g., `anthropic/claude-sonnet-4-5`, `openai/gpt-4o`).
+- [Kimi Code](https://www.kimi.com/code) — install the CLI, then authenticate. For non-interactive use (which clink always is), the cleanest route is an API key from the Kimi Code Console rather than the interactive OAuth login: set `KIMI_MODEL_NAME`, `KIMI_MODEL_API_KEY`, `KIMI_MODEL_PROVIDER_TYPE=anthropic` and `KIMI_MODEL_BASE_URL=https://api.kimi.com/coding/` in the environment Unison is launched with. The CLI synthesises a provider from those in memory, writes nothing to `config.toml`, and never touches `/login`. The OAuth access token expires mid-session, which will fail a long run partway through. **Model selection uses `-m`**; prefer `k3[1m]` over `k3` for the 1M context window. **Prompt transport is argv, not stdin** — Kimi rejects `--output-format` outside prompt mode. **No read-only flag exists**: see the notes in the README before pointing this at a repository you care about.
 - [Amp](https://ampcode.com) — install per Sourcegraph's instructions; requires a Sourcegraph account. For non-interactive use (which clink always is), set `AMP_API_KEY` in your environment before launching Unison. For interactive first-time setup, run `amp login`. **Model selection on Amp uses named modes** (`deep`, `large`, `rush`, `smart`) via `--mode`, not arbitrary model strings — the manifest's `supported_models` allowlist enforces these values. **Recursion warning:** Amp is MCP-aware (`amp mcp add ...`). If you wire Unison as an MCP server in Amp's config AND invoke `clink with cli_name="amp"` from a Unison-aware CLI, the Phase 0 cross-cutting recursion guard will refuse the inner invocation to prevent a context-window-exploding loop. Remove Unison from Amp's MCP config or raise `CLINK_MAX_RECURSION_DEPTH` if the depth is intentional.
 
 ## Related Guides

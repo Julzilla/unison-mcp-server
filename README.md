@@ -30,7 +30,7 @@ Gemini · OpenAI · Anthropic · Grok · Azure · Ollama · OpenRouter · DIAL �
 
 Unison forks [BeehiveInnovations/pal-mcp-server](https://github.com/BeehiveInnovations/pal-mcp-server) and preserves every PAL tool, provider, and workflow. On top of that, it changes what's possible in four ways:
 
-- 🔗 **CLI-to-CLI orchestration.** The new [`clink`](docs/tools/clink.md) tool spawns **seven** subagents — Claude Code, Codex, Gemini CLI, opencode, Aider, Crush, and Amp — in isolated contexts with role presets, read-only enforcement (native CLI flags + post-call filesystem-snapshot diff), and a cross-cutting recursion guard for MCP-aware CLIs. **PAL has no equivalent.**
+- 🔗 **CLI-to-CLI orchestration.** The new [`clink`](docs/tools/clink.md) tool spawns **eight** subagents — Claude Code, Codex, Gemini CLI, opencode, Aider, Crush, Amp, and Kimi Code — in isolated contexts with role presets, read-only enforcement (native CLI flags + post-call filesystem-snapshot diff), and a cross-cutting recursion guard for MCP-aware CLIs. **PAL has no equivalent.**
 - 🌐 **75+ providers through one integration.** clink + opencode routes a single call to OpenAI, Anthropic, Google, Ollama, OpenRouter, xAI, Mistral, Groq, DeepSeek, and ~70 more via `provider/model` syntax. No per-provider implementation work.
 - 🧠 **2000+ models, auto-discovered.** Every model from every authenticated provider appears at startup via [LiteLLM](https://github.com/BerriAI/litellm); a **weekly CI workflow** opens a PR with the latest catalog. Auto-mode picks the smartest available model using `intelligence_score`, not hardcoded preference lists that go stale.
 - 🛡️ **Production reliability.** Optional **SQLite conversation backend** survives restarts; a **per-provider circuit breaker** fails fast on outages so consensus doesn't hang on a dead provider.
@@ -52,7 +52,7 @@ Unison forks [BeehiveInnovations/pal-mcp-server](https://github.com/BeehiveInnov
 
 The new **[`clink`](docs/tools/clink.md)** (CLI + Link) tool connects external AI CLIs directly into your workflow:
 
-- **Connect external CLIs** like [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex CLI](https://github.com/openai/codex), [Claude Code](https://www.anthropic.com/claude-code), [opencode](https://opencode.ai), [Aider](https://aider.chat), [Crush](https://github.com/charmbracelet/crush), and [Amp](https://ampcode.com) directly into your workflow
+- **Connect external CLIs** like [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex CLI](https://github.com/openai/codex), [Claude Code](https://www.anthropic.com/claude-code), [opencode](https://opencode.ai), [Aider](https://aider.chat), [Crush](https://github.com/charmbracelet/crush), [Amp](https://ampcode.com), and [Kimi Code](https://www.kimi.com/code) directly into your workflow
 - **CLI Subagents** - Launch isolated CLI instances from _within_ your current CLI! Claude Code can spawn Codex subagents, Codex can spawn Gemini CLI subagents, etc. Offload heavy tasks (code reviews, bug hunting) to fresh contexts while your main session's context window remains unpolluted. Each subagent returns only final results.
 - **Context Isolation** - Run separate investigations without polluting your primary workspace
 - **Role Specialization** - Spawn `planner`, `codereviewer`, or custom role agents with specialized system prompts
@@ -111,6 +111,11 @@ clink with claude codereviewer in read-only mode to review PR #482
 | `aider` | Largest AI-CLI userbase, git-integrated diff-edit workflow, multi-provider via standard env keys | `--dry-run` (native) |
 | `crush` | Charm-built multi-provider TUI / CLI, `provider/model` syntax for routing | _(none — prompt + snapshot)_ |
 | `amp` | Sourcegraph-backed, code-search-aware tools, structured JSONL output, image input via `--stream-json-input` | _(none — prompt + snapshot)_ |
+| `kimi` | Kimi K3 via a Kimi Code subscription, 1M context on `k3[1m]`, streams reasoning natively | _(none — see note)_ |
+
+> **Note on `kimi` read-only mode:** Kimi has no read-only flag. `--prompt` runs in `auto` permission mode and the CLI rejects `--yolo`, `--auto` and `--plan` alongside it, so an unconstrained run WILL write files. Constrain it with static `[[permission.rules]]` in `$KIMI_CODE_HOME/config.toml` — `deny` on `Write` and `Edit` at minimum. Two measured gotchas: a `deny` beats an `allow` regardless of rule order, so a catch-all `deny Bash` silently nullifies every `allow Bash(...)` above it; and argument-pattern globs such as `Bash(*>*)` do not reliably block what they appear to. Verify any rule change by checking the filesystem, not the denial message.
+
+> **Note on `kimi` context:** use `k3[1m]` for the 1M window. Plain `k3` resolves to the tier default, which is 256K below Allegretto — the server says so explicitly: *"Your current plan supports only kimi-k3 up to 256K context"*.
 
 > **Note on opencode/crush/amp read-only mode:** these three CLIs have no native flag for read-only-while-still-executing semantics. Read-only enforcement falls back to prompt-level instruction + post-execution filesystem snapshot diff — both CLI-agnostic. CLI bookkeeping that each CLI creates on first-run (`.opencode/...`, `.crush/...`) is classified separately under `read_only_violations.by_cli_bookkeeping` so it doesn't drown out genuine model-write detection. Aider is the exception — its documented `--dry-run` flag provides native read-only enforcement, supplemented by snapshot verification.
 
