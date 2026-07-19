@@ -14,7 +14,12 @@ from pydantic import BaseModel, Field
 
 from clink import get_registry
 from clink.agents import AgentOutput, CLIAgentError, create_agent
-from clink.constants import CLINK_DEPTH_ENV_VAR, CLINK_MAX_DEPTH_ENV_VAR, DEFAULT_CLINK_MAX_DEPTH
+from clink.constants import (
+    CLI_DISPLAY_NAMES,
+    CLINK_DEPTH_ENV_VAR,
+    CLINK_MAX_DEPTH_ENV_VAR,
+    DEFAULT_CLINK_MAX_DEPTH,
+)
 from clink.models import ResolvedCLIClient, ResolvedCLIRole
 from config import TEMPERATURE_BALANCED
 from tools.models import ToolModelCategory, ToolOutput
@@ -301,6 +306,7 @@ class CLinkTool(SimpleTool):
                 role_config,
                 system_prompt=system_prompt_text,
                 include_system_prompt=include_system_prompt,
+                cli_name=client_config.name,
             )
         except Exception as exc:
             logger.exception("Failed to prepare clink prompt")
@@ -414,6 +420,7 @@ class CLinkTool(SimpleTool):
             role_config,
             system_prompt=system_prompt_text,
             include_system_prompt=include_system_prompt,
+            cli_name=client_config.name,
         )
 
     async def _prepare_prompt_for_role(
@@ -423,12 +430,15 @@ class CLinkTool(SimpleTool):
         *,
         system_prompt: str,
         include_system_prompt: bool,
+        cli_name: str,
     ) -> str:
         """Load the role prompt and assemble the final user message."""
         self._active_system_prompt = system_prompt
         try:
             user_content = self.handle_prompt_file_with_fallback(request).strip()
-            guidance = self._agent_capabilities_guidance()
+            # Resolved name, not request.cli_name: the latter is optional when
+            # the server exposes a single CLI and the caller omits it.
+            guidance = self._agent_capabilities_guidance(cli_name)
             file_section = self._format_file_references(self.get_request_files(request))
 
             sections: list[str] = []
@@ -607,9 +617,17 @@ class CLinkTool(SimpleTool):
         error_output = ToolOutput(status="error", content=message, content_type="text", metadata=metadata)
         raise ToolExecutionError(error_output.model_dump_json())
 
-    def _agent_capabilities_guidance(self) -> str:
+    def _agent_capabilities_guidance(self, cli_name: str) -> str:
+        """Tell the spawned agent which CLI it is, so it knows what it can do.
+
+        This used to hardcode "the Gemini CLI agent" for every target, which
+        meant seven of the eight were told they were something else. Harmless
+        for the capability instruction that follows, but a spawned model that
+        is asked what it is will repeat whatever it was told.
+        """
+        display = CLI_DISPLAY_NAMES.get(cli_name, cli_name)
         return (
-            "You are operating through the Gemini CLI agent. You have access to your full suite of "
+            f"You are operating through the {display} agent. You have access to your full suite of "
             "CLI capabilities—including launching web searches, reading files, and using any other "
             "available tools. Gather current information yourself and deliver the final answer without "
             "asking the Unison MCP host to perform searches or file reads."

@@ -22,6 +22,21 @@ CONFIG_DIR = PROJECT_ROOT / "conf" / "cli_clients"
 USER_CONFIG_DIR = Path.home() / ".unison" / "cli_clients"
 
 
+# Human-readable product names, for prompt text that tells a spawned agent
+# which CLI it is running as. Keys are client names; anything absent falls back
+# to the client name itself, so a user-defined client still reads sensibly.
+CLI_DISPLAY_NAMES: dict[str, str] = {
+    "gemini": "Gemini CLI",
+    "codex": "Codex CLI",
+    "claude": "Claude Code",
+    "opencode": "opencode",
+    "aider": "Aider",
+    "crush": "Crush",
+    "amp": "Amp",
+    "kimi": "Kimi Code CLI",
+}
+
+
 @dataclass(frozen=True)
 class CLIInternalDefaults:
     """Internal defaults applied to a CLI client during registry load."""
