@@ -701,6 +701,27 @@ class OpenAICompatibleProvider(ModelProvider):
             content = response.choices[0].message.content
             usage = self._extract_usage(response)
 
+            # A reasoning model can return HTTP 200 with content="" and
+            # finish_reason="length" when reasoning consumes the whole output
+            # budget. Returning that as a success is worse than failing: the
+            # workflow layer checks `if model_response.content:`, so an empty
+            # string is falsy and the tool completes having produced nothing,
+            # with no error anywhere to explain it. Raising here routes it into
+            # the retry logic below instead, and names the likely cause.
+            if not (content or "").strip():
+                finish_reason = response.choices[0].finish_reason
+                reasoning_tokens = None
+                try:
+                    reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"{self.FRIENDLY_NAME} returned empty content for {resolved_model} "
+                    f"(finish_reason={finish_reason}, reasoning_tokens={reasoning_tokens}). "
+                    f"For reasoning models this usually means the output budget was spent "
+                    f"on reasoning; reduce the input size or raise max_tokens."
+                )
+
             return ModelResponse(
                 content=content,
                 usage=usage,

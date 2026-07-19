@@ -71,6 +71,12 @@ INTERNAL_DEFAULTS: dict[str, CLIInternalDefaults] = {
         default_role_prompt="systemprompts/clink/default.txt",
         runner="crush",
     ),
+    "kimi": CLIInternalDefaults(
+        parser="kimi_jsonl",
+        additional_args=["--output-format", "stream-json"],
+        default_role_prompt="systemprompts/clink/default.txt",
+        runner="kimi",
+    ),
     "amp": CLIInternalDefaults(
         parser="amp_jsonl",
         additional_args=[],

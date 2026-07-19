@@ -11,10 +11,12 @@ from .claude import ClaudeAgent
 from .codex import CodexAgent
 from .crush import CrushAgent
 from .gemini import GeminiAgent
+from .kimi import KimiAgent
 from .opencode import OpencodeAgent
 
 _AGENTS: dict[str, type[BaseCLIAgent]] = {
     "gemini": GeminiAgent,
+    "kimi": KimiAgent,
     "codex": CodexAgent,
     "claude": ClaudeAgent,
     "opencode": OpencodeAgent,
