@@ -17,7 +17,7 @@
 ### Your CLI + Multiple Models = Your AI Dev Team
 
 **Use the 🤖 CLI you love:**  
-[Claude Code](https://www.anthropic.com/claude-code) · [Gemini CLI](https://github.com/google-gemini/gemini-cli) · [Codex CLI](https://github.com/openai/codex) · [Qwen Code CLI](https://qwenlm.github.io/qwen-code-docs/) · [Kimi Code](https://www.kimi.com/code) · [Cursor](https://cursor.com) · _and more_
+[Claude Code](https://www.anthropic.com/claude-code) · [Gemini CLI](https://github.com/google-gemini/gemini-cli) · [Codex CLI](https://github.com/openai/codex) · [Qwen Code CLI](https://qwenlm.github.io/qwen-code-docs/) · [Kimi Code](https://github.com/MoonshotAI/kimi-code) · [Cursor](https://cursor.com) · _and more_
 
 **With multiple models within a single prompt:**  
 Gemini · OpenAI · Anthropic · Grok · Kimi K3 · Azure · Ollama · OpenRouter · DIAL · On-Device Model
@@ -52,7 +52,7 @@ Unison forks [BeehiveInnovations/pal-mcp-server](https://github.com/BeehiveInnov
 
 The new **[`clink`](docs/tools/clink.md)** (CLI + Link) tool connects external AI CLIs directly into your workflow:
 
-- **Connect external CLIs** like [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex CLI](https://github.com/openai/codex), [Claude Code](https://www.anthropic.com/claude-code), [opencode](https://opencode.ai), [Aider](https://aider.chat), [Crush](https://github.com/charmbracelet/crush), [Amp](https://ampcode.com), and [Kimi Code](https://www.kimi.com/code) directly into your workflow
+- **Connect external CLIs** like [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex CLI](https://github.com/openai/codex), [Claude Code](https://www.anthropic.com/claude-code), [opencode](https://opencode.ai), [Aider](https://aider.chat), [Crush](https://github.com/charmbracelet/crush), [Amp](https://ampcode.com), and [Kimi Code](https://github.com/MoonshotAI/kimi-code) directly into your workflow
 - **CLI Subagents** - Launch isolated CLI instances from _within_ your current CLI! Claude Code can spawn Codex subagents, Codex can spawn Gemini CLI subagents, etc. Offload heavy tasks (code reviews, bug hunting) to fresh contexts while your main session's context window remains unpolluted. Each subagent returns only final results.
 - **Context Isolation** - Run separate investigations without polluting your primary workspace
 - **Role Specialization** - Spawn `planner`, `codereviewer`, or custom role agents with specialized system prompts
@@ -634,7 +634,7 @@ Built with the power of **Multi-Model AI** collaboration 🤝
 - [Gemini](https://ai.google.dev/)
 - [OpenAI](https://openai.com/)
 - [Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/)
-- [Kimi Code](https://www.kimi.com/code)
+- [Kimi Code](https://github.com/MoonshotAI/kimi-code)
 
 ### Star History
 
