@@ -56,7 +56,7 @@ The new **[`clink`](docs/tools/clink.md)** (CLI + Link) tool connects external A
 - **CLI Subagents** - Launch isolated CLI instances from _within_ your current CLI! Claude Code can spawn Codex subagents, Codex can spawn Gemini CLI subagents, etc. Offload heavy tasks (code reviews, bug hunting) to fresh contexts while your main session's context window remains unpolluted. Each subagent returns only final results.
 - **Context Isolation** - Run separate investigations without polluting your primary workspace
 - **Role Specialization** - Spawn `planner`, `codereviewer`, or custom role agents with specialized system prompts
-- **Per-call Model Selection** - Pick a model at call time via the `model` parameter. Opencode uses `provider/model` (e.g. `anthropic/claude-sonnet-4-5`, `openai/gpt-5`, `ollama/llama3.2`) and unlocks ~75 providers through a single integration. Manifests can declare an optional `supported_models` allowlist to curate available models per CLI
+- **Per-call Model Selection** - Pick a model at call time via the `model` parameter. Opencode uses `provider/model` (e.g. `anthropic/claude-sonnet-4-5`, `openai/gpt-5`, `ollama/llama3.2`) and unlocks ~75 providers through a single integration. Manifests can declare an optional `supported_models` allowlist to curate available models per CLI — `kimi` deliberately declares none, because its valid model names come from the caller's own `config.toml` and change with the auth route
 - **Full CLI Capabilities** - Web search, file inspection, MCP tool access, latest documentation lookups
 - **Seamless Continuity** - Sub-CLIs participate as first-class members with full conversation context between tools
 
@@ -121,7 +121,7 @@ clink with claude codereviewer in read-only mode to review PR #482
 >
 > With **`config.toml` auth** (`kimi /login`), clink's `model` argument maps to `-m` and resolves against `[models."..."]` keys in your own config. Those keys are namespaced by provider, so a default install gives you `kimi-code/k3`, `kimi-code/kimi-for-coding` and `kimi-code/kimi-for-coding-highspeed` — the bare names are rejected. `kimi-code/k3` already declares `max_context_size = 1048576`, so there is no context suffix to add. Because the valid keys depend on your own config, the manifest ships no `supported_models` allowlist.
 
-> **Note on opencode/crush/amp read-only mode:** these three CLIs have no native flag for read-only-while-still-executing semantics. Read-only enforcement falls back to prompt-level instruction + post-execution filesystem snapshot diff — both CLI-agnostic. CLI bookkeeping that each CLI creates on first-run (`.opencode/...`, `.crush/...`) is classified separately under `read_only_violations.by_cli_bookkeeping` so it doesn't drown out genuine model-write detection. Aider is the exception — its documented `--dry-run` flag provides native read-only enforcement, supplemented by snapshot verification.
+> **Note on opencode/crush/amp read-only mode:** none of these three expose a native flag for read-only-while-still-executing semantics. Read-only enforcement falls back to prompt-level instruction + post-execution filesystem snapshot diff — both CLI-agnostic. `kimi` shares that gap and takes the same fallback, but its own note above applies first: it also accepts static `config.toml` permission rules, which act before anything reaches the snapshot stage. CLI bookkeeping that each CLI creates on first-run (`.opencode/...`, `.crush/...`) is classified separately under `read_only_violations.by_cli_bookkeeping` so it doesn't drown out genuine model-write detection. Aider is the exception — its documented `--dry-run` flag provides native read-only enforcement, supplemented by snapshot verification.
 
 > **Recursion guard for MCP-aware CLIs:** Crush and Amp both support user-defined MCP servers. If you wire Unison as an MCP server in their config AND invoke `clink with cli_name="crush"` (or `"amp"`) from a Unison-aware CLI, you'd create a context-window-exploding loop. A cross-cutting guard at `CLinkTool.execute()` reads `UNISON_CLINK_DEPTH` from the environment and refuses invocations beyond `CLINK_MAX_RECURSION_DEPTH` (default 1) with a clear remediation message. Applies to ALL spawned CLIs.
 
@@ -299,6 +299,7 @@ Unison inherits the entire PAL feature set. Every row below is an addition or ha
 - **[X.AI](https://console.x.ai/)** - Grok models
 - **[DIAL](https://dialx.ai/)** - Vendor-agnostic model access
 - **[Ollama](https://ollama.ai/)** - Local models (free)
+- **[Kimi Code](https://www.kimi.com/code)** - K3 with a 1M context window, via the `kimi` clink target
 
 **2. Install** (choose one):
 
@@ -633,6 +634,7 @@ Built with the power of **Multi-Model AI** collaboration 🤝
 - [Gemini](https://ai.google.dev/)
 - [OpenAI](https://openai.com/)
 - [Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/)
+- [Kimi Code](https://www.kimi.com/code)
 
 ### Star History
 
