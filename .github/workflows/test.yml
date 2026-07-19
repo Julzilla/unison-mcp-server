@@ -107,4 +107,5 @@ jobs:
             clink/agents/opencode.py clink/parsers/opencode.py \
             clink/agents/aider.py clink/parsers/aider.py \
             clink/agents/crush.py clink/parsers/crush.py \
-            clink/agents/amp.py clink/parsers/amp.py
+            clink/agents/amp.py clink/parsers/amp.py \
+            clink/agents/kimi.py clink/parsers/kimi.py
