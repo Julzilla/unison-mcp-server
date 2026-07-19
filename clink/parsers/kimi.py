@@ -14,17 +14,25 @@ class KimiJSONLParser(BaseParser):
     Kimi emits JSON Lines rather than a single document. Two line shapes matter:
 
         {"role": "assistant", "content": "..."}
-        {"role": "meta", "type": "session.resume_hint", "session_id": "..."}
+        {"role": "meta", "type": "session.resume_hint", "session_id": "...",
+         "command": "kimi -r ...", "content": "To resume this session: ..."}
 
-    Only ``assistant`` lines carry the answer; ``meta`` lines are session
-    bookkeeping and are skipped.
+    Only ``assistant`` lines carry the answer. Note that ``meta`` lines have a
+    ``content`` field of their own holding human-readable resume text — keying
+    on ``content`` alone would append "To resume this session: kimi -r ..." to
+    every answer, so the role check is load-bearing rather than tidiness.
 
-    Kimi is a reasoning model and can emit a large volume of
-    ``reasoning_content`` before (or instead of) any ``content``. Reasoning is
-    deliberately NOT accumulated into the response — it is the model's working,
-    not its answer — but it IS counted, because a run that produces reasoning
-    and no content is the signature of a call that will not converge, and the
-    caller deserves to be told that rather than handed an empty string.
+    Observed key set across kimi 0.27.0 runs, including deliberately
+    reasoning-heavy prompts, is exactly::
+
+        command, content, role, session_id, type
+
+    In particular there is no ``reasoning_content`` and no ``finish_reason``:
+    those belong to the OpenAI-compatible HTTP response shape, not to this
+    CLI's stream-json. Both are still read below, defensively, so that a future
+    CLI version emitting them degrades into richer metadata instead of a
+    misparse — but neither has ever been seen in practice, and nothing here
+    should be read as documenting that Kimi produces them.
     """
 
     name = "kimi_jsonl"
@@ -89,16 +97,16 @@ class KimiJSONLParser(BaseParser):
         if content_text:
             return ParsedCLIResponse(content=content_text, metadata=metadata)
 
-        # Reasoning with no content is a real, reproducible outcome on large or
-        # open-ended prompts: the model thinks until it stops and never answers.
-        # Say so explicitly instead of returning an empty response that reads as
-        # success to the caller.
+        # Defensive: not reachable against kimi 0.27.0, which emits no
+        # reasoning_content. Kept so that a future version which thinks without
+        # answering reports that fact rather than an empty success.
         if reasoning_chars:
             raise ParserError(
                 f"Kimi CLI produced {reasoning_chars} characters of reasoning and no "
-                f"answer (finish_reason={finish_reason}). This usually means the prompt "
-                f"was too open-ended or the input too large; a bounded instruction such "
-                f"as 'at most 3 findings, one line each, then stop' reliably converges."
+                f"answer (finish_reason={finish_reason}). Bound the instruction — "
+                f"e.g. 'at most 3 findings, one line each, then stop' — and retry."
             )
 
+        # The reachable empty case: the CLI exited 0 having emitted only session
+        # bookkeeping. Raising keeps that from surfacing as a blank success.
         raise ParserError("Kimi CLI response contained no assistant content")

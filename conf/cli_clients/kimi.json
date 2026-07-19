@@ -3,7 +3,6 @@
   "command": "kimi",
   "additional_args": [],
   "env": {},
-  "supported_models": ["k3[1m]", "k3", "kimi-for-coding", "kimi-for-coding-highspeed"],
   "roles": {
     "default": {
       "prompt_path": "systemprompts/clink/default.txt",

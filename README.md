@@ -111,11 +111,15 @@ clink with claude codereviewer in read-only mode to review PR #482
 | `aider` | Largest AI-CLI userbase, git-integrated diff-edit workflow, multi-provider via standard env keys | `--dry-run` (native) |
 | `crush` | Charm-built multi-provider TUI / CLI, `provider/model` syntax for routing | _(none — prompt + snapshot)_ |
 | `amp` | Sourcegraph-backed, code-search-aware tools, structured JSONL output, image input via `--stream-json-input` | _(none — prompt + snapshot)_ |
-| `kimi` | Kimi K3 via a Kimi Code subscription, 1M context on `k3[1m]`, streams reasoning natively | _(none — see note)_ |
+| `kimi` | Kimi K3 via a Kimi Code subscription, 1M context window, streams reasoning natively | _(none — see note)_ |
 
 > **Note on `kimi` read-only mode:** Kimi has no read-only flag. `--prompt` runs in `auto` permission mode and the CLI rejects `--yolo`, `--auto` and `--plan` alongside it, so an unconstrained run WILL write files. Constrain it with static `[[permission.rules]]` in `$KIMI_CODE_HOME/config.toml` — `deny` on `Write` and `Edit` at minimum. Two measured gotchas: a `deny` beats an `allow` regardless of rule order, so a catch-all `deny Bash` silently nullifies every `allow Bash(...)` above it; and argument-pattern globs such as `Bash(*>*)` do not reliably block what they appear to. Verify any rule change by checking the filesystem, not the denial message.
 
-> **Note on `kimi` context:** use `k3[1m]` for the 1M window. Plain `k3` resolves to the tier default, which is 256K below Allegretto — the server says so explicitly: *"Your current plan supports only kimi-k3 up to 256K context"*.
+> **Note on `kimi` model selection:** how you authenticate decides how you pick the model, and the two routes do not share a namespace.
+>
+> With **`KIMI_MODEL_*` env vars** (the recommended headless route), leave clink's `model` argument unset. Those vars synthesize a provider in memory and write nothing to `config.toml`, so `-m` has no model table to resolve against and fails for *every* value — including one matching `KIMI_MODEL_NAME` exactly. Choose the model with `KIMI_MODEL_NAME`, which takes API model strings: `k3`, or `k3[1m]` for the 1M window. Plain `k3` resolves to the tier default, which the server caps below Allegretto: *"Your current plan supports only kimi-k3 up to 256K context"*.
+>
+> With **`config.toml` auth** (`kimi /login`), clink's `model` argument maps to `-m` and resolves against `[models."..."]` keys in your own config. Those keys are namespaced by provider, so a default install gives you `kimi-code/k3`, `kimi-code/kimi-for-coding` and `kimi-code/kimi-for-coding-highspeed` — the bare names are rejected. `kimi-code/k3` already declares `max_context_size = 1048576`, so there is no context suffix to add. Because the valid keys depend on your own config, the manifest ships no `supported_models` allowlist.
 
 > **Note on opencode/crush/amp read-only mode:** these three CLIs have no native flag for read-only-while-still-executing semantics. Read-only enforcement falls back to prompt-level instruction + post-execution filesystem snapshot diff — both CLI-agnostic. CLI bookkeeping that each CLI creates on first-run (`.opencode/...`, `.crush/...`) is classified separately under `read_only_violations.by_cli_bookkeeping` so it doesn't drown out genuine model-write detection. Aider is the exception — its documented `--dry-run` flag provides native read-only enforcement, supplemented by snapshot verification.
 
@@ -140,7 +144,7 @@ opencode providers list                   # check which providers are authentica
 | `codex` | `codex --help` · [Codex CLI docs](https://github.com/openai/codex) | OpenAI model IDs (e.g. `o3-mini`) |
 | `aider` | `aider --help` · [Aider docs](https://aider.chat/docs) | provider-prefixed names (e.g. `gpt-4o-mini`, `claude-sonnet-4-5`) per Aider's `--model` flag |
 | `crush` | `crush models` (local) | `provider/model` (e.g. `anthropic/claude-sonnet-4-5`, `openai/gpt-4o`) — same shape as opencode |
-| `kimi` | `kimi --help` · `GET api.kimi.com/coding/v1/models` (authoritative, per-account) | model IDs. Use `k3[1m]` for the 1M window; plain `k3` is the tier default (256K below Allegretto) |
+| `kimi` | `grep '^\[models\.' $KIMI_CODE_HOME/config.toml` for `-m` values · `GET api.kimi.com/coding/v1/models` (per-account) for `KIMI_MODEL_NAME` values | **Depends on your auth** — see the model-selection note above. `-m` takes provider-namespaced config keys (`kimi-code/k3`); `KIMI_MODEL_NAME` takes API strings (`k3`, `k3[1m]`) |
 | `amp` | `amp --help` · [Amp owner's manual](https://ampcode.com/manual) | **Named modes only**: `deep`, `large`, `rush`, `smart` (mapped to `--mode`, not arbitrary model strings) |
 
 **Validation behavior:** the `model` field is free-text — invalid values come back as a CLI-level error in response metadata, not a schema rejection. Authentication for opencode providers is opencode's own concern (`opencode auth`); Unison doesn't manage credentials.

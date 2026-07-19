@@ -52,9 +52,31 @@ class KimiAgent(BaseCLIAgent):
         return []
 
     def render_model_args(self, model: str) -> list[str]:
-        """Kimi selects the model with ``-m``.
+        """Kimi selects the model with ``-m``, but only under config.toml auth.
 
-        Use ``k3[1m]`` rather than ``k3`` for the 1M context window; plain
-        ``k3`` resolves to the tier default, which is 256K below Allegretto.
+        ``-m`` resolves the value against ``[models."..."]`` keys in the user's
+        own ``config.toml`` and fails closed if there is no match::
+
+            config.invalid: Model "k3" is not configured in config.toml.
+
+        Two consequences worth knowing before passing a model at all:
+
+        1. **The keys are namespaced by provider.** A default ``kimi /login``
+           install writes the provider ``managed:kimi-code``, so the keys are
+           ``kimi-code/k3``, ``kimi-code/kimi-for-coding`` and
+           ``kimi-code/kimi-for-coding-highspeed`` — not the bare model names.
+           ``kimi-code/k3`` already carries ``max_context_size = 1048576``, so
+           no context-window suffix is needed or accepted.
+
+        2. **Under ``KIMI_MODEL_*`` env auth, every ``-m`` value fails**,
+           including one that matches ``KIMI_MODEL_NAME`` exactly. Those vars
+           synthesize a provider in memory and write nothing to ``config.toml``,
+           so there is no model table to resolve against. Omit the model and
+           select it with ``KIMI_MODEL_NAME`` instead, where the API model
+           strings (``k3``, or ``k3[1m]`` for the 1M window) do apply.
+
+        Because valid keys are per-user, the manifest ships no
+        ``supported_models`` allowlist — a fixed list would reject working
+        models and admit broken ones.
         """
         return ["-m", model]
