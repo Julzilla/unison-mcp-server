@@ -17,7 +17,7 @@
 ### Your CLI + Multiple Models = Your AI Dev Team
 
 **Use the 🤖 CLI you love:**  
-[Claude Code](https://www.anthropic.com/claude-code) · [Gemini CLI](https://github.com/google-gemini/gemini-cli) · [Codex CLI](https://github.com/openai/codex) · [Qwen Code CLI](https://qwenlm.github.io/qwen-code-docs/) · [Kimi Code](https://github.com/MoonshotAI/kimi-code) · [Cursor](https://cursor.com) · _and more_
+[Claude Code](https://www.anthropic.com/claude-code) · [Gemini CLI](https://github.com/google-gemini/gemini-cli) · [Codex CLI](https://github.com/openai/codex) · [Qwen Code CLI](https://qwenlm.github.io/qwen-code-docs/) · [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code) · [Cursor](https://cursor.com) · _and more_
 
 **With multiple models within a single prompt:**  
 Gemini · OpenAI · Anthropic · Grok · Kimi K3 · Azure · Ollama · OpenRouter · DIAL · On-Device Model
@@ -30,7 +30,7 @@ Gemini · OpenAI · Anthropic · Grok · Kimi K3 · Azure · Ollama · OpenRoute
 
 Unison forks [BeehiveInnovations/pal-mcp-server](https://github.com/BeehiveInnovations/pal-mcp-server) and preserves every PAL tool, provider, and workflow. On top of that, it changes what's possible in four ways:
 
-- 🔗 **CLI-to-CLI orchestration.** The new [`clink`](docs/tools/clink.md) tool spawns **eight** subagents (Claude Code, Codex, Gemini CLI, opencode, Aider, Crush, Amp, and Kimi Code) in isolated contexts, with role presets, read-only enforcement (native CLI flags + post-call filesystem-snapshot diff), and a cross-cutting recursion guard for MCP-aware CLIs. **PAL has no equivalent.**
+- 🔗 **CLI-to-CLI orchestration.** The new [`clink`](docs/tools/clink.md) tool spawns **eight** subagents (Claude Code, Codex, Gemini CLI, opencode, Aider, Crush, Amp, and Kimi Code CLI) in isolated contexts, with role presets, read-only enforcement (native CLI flags + post-call filesystem-snapshot diff), and a cross-cutting recursion guard for MCP-aware CLIs. **PAL has no equivalent.**
 - 🌐 **75+ providers through one integration.** clink + opencode routes a single call to OpenAI, Anthropic, Google, Ollama, OpenRouter, xAI, Mistral, Groq, DeepSeek, and ~70 more via `provider/model` syntax. No per-provider implementation work.
 - 🧠 **2000+ models, auto-discovered.** Every model from every authenticated provider appears at startup via [LiteLLM](https://github.com/BerriAI/litellm); a **weekly CI workflow** opens a PR with the latest catalog. Auto-mode picks the smartest available model using `intelligence_score`, not hardcoded preference lists that go stale.
 - 🛡️ **Production reliability.** Optional **SQLite conversation backend** survives restarts; a **per-provider circuit breaker** fails fast on outages so consensus doesn't hang on a dead provider.
@@ -52,7 +52,7 @@ Unison forks [BeehiveInnovations/pal-mcp-server](https://github.com/BeehiveInnov
 
 The new **[`clink`](docs/tools/clink.md)** (CLI + Link) tool connects external AI CLIs directly into your workflow:
 
-- **Connect external CLIs** like [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex CLI](https://github.com/openai/codex), [Claude Code](https://www.anthropic.com/claude-code), [opencode](https://opencode.ai), [Aider](https://aider.chat), [Crush](https://github.com/charmbracelet/crush), [Amp](https://ampcode.com), and [Kimi Code](https://github.com/MoonshotAI/kimi-code) directly into your workflow
+- **Connect external CLIs** like [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex CLI](https://github.com/openai/codex), [Claude Code](https://www.anthropic.com/claude-code), [opencode](https://opencode.ai), [Aider](https://aider.chat), [Crush](https://github.com/charmbracelet/crush), [Amp](https://ampcode.com), and [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code) directly into your workflow
 - **CLI Subagents** - Launch isolated CLI instances from _within_ your current CLI! Claude Code can spawn Codex subagents, Codex can spawn Gemini CLI subagents, etc. Offload heavy tasks (code reviews, bug hunting) to fresh contexts while your main session's context window remains unpolluted. Each subagent returns only final results.
 - **Context Isolation** - Run separate investigations without polluting your primary workspace
 - **Role Specialization** - Spawn `planner`, `codereviewer`, or custom role agents with specialized system prompts
@@ -123,7 +123,7 @@ clink with claude codereviewer in read-only mode to review PR #482
 
 > **Note on opencode/crush/amp read-only mode:** none of these three expose a native flag for read-only-while-still-executing semantics. Read-only enforcement falls back to prompt-level instruction plus a post-execution filesystem snapshot diff, both CLI-agnostic. `kimi` shares that gap and takes the same fallback, though its own note above applies first: it also accepts static `config.toml` permission rules, which act before anything reaches the snapshot stage. CLI bookkeeping that each CLI creates on first-run (`.opencode/...`, `.crush/...`) is classified separately under `read_only_violations.by_cli_bookkeeping` so it doesn't drown out genuine model-write detection. Aider is the exception: its documented `--dry-run` flag provides native read-only enforcement, supplemented by snapshot verification.
 
-> **Recursion guard for MCP-aware CLIs:** Crush, Amp and Kimi Code all support user-defined MCP servers. Kimi reads them from `.kimi-code/mcp.json` rather than a subcommand, so `kimi --help` gives no hint that it hosts them. If you wire Unison as an MCP server in any of their configs AND invoke `clink with cli_name="crush"` (or `"amp"`, or `"kimi"`) from a Unison-aware CLI, you'd create a context-window-exploding loop. A cross-cutting guard at `CLinkTool.execute()` reads `UNISON_CLINK_DEPTH` from the environment and refuses invocations beyond `CLINK_MAX_RECURSION_DEPTH` (default 1) with a clear remediation message. Applies to ALL spawned CLIs.
+> **Recursion guard for MCP-aware CLIs:** Crush, Amp and Kimi Code CLI all support user-defined MCP servers. Kimi Code CLI reads them from `.kimi-code/mcp.json` rather than a subcommand, so `kimi --help` gives no hint that it hosts them. If you wire Unison as an MCP server in any of their configs AND invoke `clink with cli_name="crush"` (or `"amp"`, or `"kimi"`) from a Unison-aware CLI, you'd create a context-window-exploding loop. A cross-cutting guard at `CLinkTool.execute()` reads `UNISON_CLINK_DEPTH` from the environment and refuses invocations beyond `CLINK_MAX_RECURSION_DEPTH` (default 1) with a clear remediation message. Applies to ALL spawned CLIs.
 
 ### Where to find valid `model` values
 
@@ -634,7 +634,7 @@ Built with the power of **Multi-Model AI** collaboration 🤝
 - [Gemini](https://ai.google.dev/)
 - [OpenAI](https://openai.com/)
 - [Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/)
-- [Kimi Code](https://github.com/MoonshotAI/kimi-code)
+- [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code)
 
 ### Star History
 
