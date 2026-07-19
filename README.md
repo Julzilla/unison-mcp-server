@@ -140,6 +140,7 @@ opencode providers list                   # check which providers are authentica
 | `codex` | `codex --help` · [Codex CLI docs](https://github.com/openai/codex) | OpenAI model IDs (e.g. `o3-mini`) |
 | `aider` | `aider --help` · [Aider docs](https://aider.chat/docs) | provider-prefixed names (e.g. `gpt-4o-mini`, `claude-sonnet-4-5`) per Aider's `--model` flag |
 | `crush` | `crush models` (local) | `provider/model` (e.g. `anthropic/claude-sonnet-4-5`, `openai/gpt-4o`) — same shape as opencode |
+| `kimi` | `kimi --help` · `GET api.kimi.com/coding/v1/models` (authoritative, per-account) | model IDs. Use `k3[1m]` for the 1M window; plain `k3` is the tier default (256K below Allegretto) |
 | `amp` | `amp --help` · [Amp owner's manual](https://ampcode.com/manual) | **Named modes only**: `deep`, `large`, `rush`, `smart` (mapped to `--mode`, not arbitrary model strings) |
 
 **Validation behavior:** the `model` field is free-text — invalid values come back as a CLI-level error in response metadata, not a schema rejection. Authentication for opencode providers is opencode's own concern (`opencode auth`); Unison doesn't manage credentials.
@@ -268,7 +269,7 @@ Unison inherits the entire PAL feature set. Every row below is an addition or ha
 
 | Capability | PAL MCP | Unison MCP |
 |---|---|---|
-| **CLI-to-CLI orchestration** | — | **`clink`** spawns **7 CLIs** as subagents — Claude, Codex, Gemini, opencode, Aider, Crush, Amp — with role presets (`planner`, `codereviewer`), optional `supported_models` allowlist per CLI, and a cross-cutting recursion guard for MCP-aware targets |
+| **CLI-to-CLI orchestration** | — | **`clink`** spawns **8 CLIs** as subagents — Claude, Codex, Gemini, opencode, Aider, Crush, Amp, Kimi — with role presets (`planner`, `codereviewer`), optional `supported_models` allowlist per CLI, and a cross-cutting recursion guard for MCP-aware targets |
 | **Read-only mode for sub-CLIs** | — | Native CLI flags (`--sandbox read-only`, `--approval-mode plan`, `--permission-mode plan`, `--dry-run`) + prompt instruction + full-tree post-call filesystem-snapshot diff; `read_only_enforced` metadata reflects whether a real sandbox flag was applied; CLI bookkeeping (e.g. `.opencode/`) classified separately so it doesn't drown out genuine model writes |
 | **Provider reach via one integration** | One provider per implementation | **75+ providers** through opencode via `provider/model` syntax (OpenAI, Anthropic, Google, Ollama, OpenRouter, xAI, Mistral, Groq, DeepSeek, …) |
 | **Model catalog** | Static JSON files, manually curated — go stale the day a provider ships a new model | **2000+ models auto-discovered** via [LiteLLM](https://github.com/BerriAI/litellm) at startup, with curated overrides for tuned metadata |
