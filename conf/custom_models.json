@@ -15,6 +15,8 @@
       "supports_images": "Whether the model can process images/visual input",
       "max_image_size_mb": "Maximum total size in MB for all images combined (capped at 40MB max for custom models)",
       "supports_temperature": "Whether the model accepts temperature parameter in API calls (set to false for O3/O4 reasoning models)",
+      "supported_reasoning_efforts": "Array of reasoning-effort values the endpoint accepts, e.g. ['low','high','max'] for Kimi K3. Omit unless the model takes the parameter: only a populated list puts 'reasoning_effort' on the wire. The caller's thinking_mode is clamped to the nearest listed value, so a model with no 'medium' still handles a medium request",
+      "default_reasoning_effort": "Effort to send when the caller specifies no thinking_mode. Must appear in supported_reasoning_efforts",
       "temperature_constraint": "Type of temperature constraint: 'fixed' (fixed value), 'range' (continuous range), 'discrete' (specific values), or omit for default range",
       "description": "Human-readable description of the model",
       "intelligence_score": "1-20 human rating used as the primary signal for auto-mode model ordering"

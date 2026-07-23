@@ -54,6 +54,15 @@ class ModelCapabilities:
     supports_temperature: bool = True
     use_openai_response_api: bool = False
     default_reasoning_effort: Optional[str] = None
+    # Reasoning-effort vocabulary the model actually accepts, e.g.
+    # ``["low", "high", "max"]`` for Kimi K3. Leave unset for models that take
+    # no effort parameter: the chat/completions path sends ``reasoning_effort``
+    # only when this is populated, so an unset value means no change on the
+    # wire. Declaring the vocabulary is what lets a request for an unsupported
+    # depth be clamped to the nearest supported one rather than sent verbatim,
+    # which matters because some endpoints accept an invalid effort silently
+    # and fall back to their weakest setting instead of returning an error.
+    supported_reasoning_efforts: Optional[list[str]] = None
     allow_code_generation: bool = (
         False  # Enables structured code generation in chat tool for substantial implementations
     )

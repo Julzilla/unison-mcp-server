@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`thinking_mode` now controls reasoning depth on OpenAI-compatible endpoints that support it.** A registry entry can declare `supported_reasoning_efforts` (e.g. `["low", "high", "max"]`), and the caller's `thinking_mode` is mapped onto that vocabulary and sent as a top-level `reasoning_effort` on both the chat/completions and streaming paths. Models that declare nothing are untouched, so no shipped registry entry changes behaviour — `default_reasoning_effort` on the OpenAI and OpenRouter o-series entries continues to flow through the Responses API path as before. The motivating case is Kimi K3, which gained selectable efforts in July 2026 (`GET /coding/v1/models` reports `valid_efforts` `low`/`high`/`max` with `default_effort` `high`): `thinking_mode` reaches the provider in `kwargs` but was filtered out by the parameter allow-list in `openai_compatible.py`, so it was accepted from the caller and silently discarded, leaving reasoning depth uncontrollable on that provider. Measured on one reasoning prompt: `low` 536 reasoning tokens in 30s, `high` 1897 in 76s, `max` 2279 in 85s.
+
+  A requested depth with no exact counterpart is clamped to the nearest supported rung rather than forwarded. This matters because the Kimi endpoint accepts an unrecognised effort with HTTP 200 and then reasons *less* than it does at `low` (an invalid value produced 203 reasoning tokens against 536 for `low`), so passing the unsupported `medium` through verbatim would have bought weaker output than asking for the shallowest supported depth. An exact tie resolves upward, so `medium` maps to `high` — the depth the endpoint would have applied on its own. Tests in `tests/test_reasoning_effort.py`.
+
 ### Changed
 
 - **OpenRouter registry refreshed to the current frontier (July 2026).** Added `anthropic/claude-opus-4.8`, `anthropic/claude-sonnet-5`, `openai/gpt-5.4`, `x-ai/grok-4.20`, and `deepseek/deepseek-v4-pro` with context windows, output caps, and pricing-informed intelligence scores taken from the live OpenRouter catalogue. Bare aliases (`opus`, `sonnet`, `grok`, `deepseek`) now track the frontier model of each lab; version-pinned aliases (`opus4.5`, `sonnet4.5`, `deepseek-r1`, `grok-4`) keep resolving to their original targets.

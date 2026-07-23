@@ -26,6 +26,54 @@ except ImportError:
     _OpenAIConnectionError = None
 
 
+# The tool layer's ``thinking_mode`` vocabulary, ordered shallowest to deepest.
+# Providers expose narrower ladders (Kimi K3 offers low/high/max, with no
+# medium), so a requested depth is mapped onto whatever the target model
+# actually accepts.
+_THINKING_LADDER = ("minimal", "low", "medium", "high", "max")
+
+
+def _resolve_reasoning_effort(
+    capabilities: Optional[ModelCapabilities],
+    requested: Optional[str],
+) -> Optional[str]:
+    """Map a ``thinking_mode`` onto a reasoning effort the model accepts.
+
+    Returns ``None`` unless the model declares ``supported_reasoning_efforts``,
+    which keeps the parameter off the wire for every provider that would reject
+    it. When a requested depth has no exact counterpart the nearest supported
+    rung is used, and an exact tie resolves upward: ``medium`` against Kimi's
+    ``low``/``high``/``max`` becomes ``high``, matching the depth the endpoint
+    would have applied by default anyway.
+
+    Clamping rather than forwarding is deliberate. The Kimi coding endpoint
+    accepts an unrecognised effort with HTTP 200 and then reasons *less* than
+    its ``low`` setting, so passing ``medium`` straight through would quietly
+    buy weaker output than asking for the shallowest supported depth.
+    """
+    supported = list(getattr(capabilities, "supported_reasoning_efforts", None) or [])
+    if not supported:
+        return None
+
+    fallback = getattr(capabilities, "default_reasoning_effort", None)
+    value = (requested or fallback or "").strip().lower()
+    if not value:
+        return None
+    if value in supported:
+        return value
+
+    ranked = [(effort, _THINKING_LADDER.index(effort)) for effort in supported if effort in _THINKING_LADDER]
+    if value not in _THINKING_LADDER or not ranked:
+        # An unrecognised request with no ladder position to measure from, or a
+        # model whose vocabulary sits entirely outside the ladder. Fall back to
+        # the declared default and otherwise leave the parameter off.
+        return fallback if fallback in supported else None
+
+    target = _THINKING_LADDER.index(value)
+    nearest, _ = min(ranked, key=lambda item: (abs(item[1] - target), -item[1]))
+    return nearest
+
+
 class OpenAICompatibleProvider(ModelProvider):
     """Shared implementation for OpenAI API lookalikes.
 
@@ -667,6 +715,14 @@ class OpenAICompatibleProvider(ModelProvider):
                     continue  # Skip unsupported parameters for reasoning models
                 completion_params[key] = value
 
+        # Reasoning-effort models take a top-level `reasoning_effort` on
+        # chat/completions. `thinking_mode` reaches this provider in kwargs but
+        # is otherwise filtered out by the allow-list above, so without this it
+        # is accepted from the caller and silently discarded.
+        reasoning_effort = _resolve_reasoning_effort(capabilities, kwargs.get("thinking_mode"))
+        if reasoning_effort:
+            completion_params["reasoning_effort"] = reasoning_effort
+
         # Check if this model needs the Responses API endpoint
         # Prefer capability metadata; fall back to static map when capabilities unavailable
         use_responses_api = False
@@ -828,6 +884,10 @@ class OpenAICompatibleProvider(ModelProvider):
             completion_params["temperature"] = effective_temperature
         if max_output_tokens and supports_sampling:
             completion_params["max_tokens"] = max_output_tokens
+
+        reasoning_effort = _resolve_reasoning_effort(capabilities, kwargs.get("thinking_mode"))
+        if reasoning_effort:
+            completion_params["reasoning_effort"] = reasoning_effort
 
         # Models that require the Responses API fall back to the default
         # single-chunk wrapper since streaming on that endpoint is not

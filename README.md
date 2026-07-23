@@ -121,6 +121,20 @@ clink with claude codereviewer in read-only mode to review PR #482
 >
 > With **`config.toml` auth** (`kimi /login`), clink's `model` argument maps to `-m` and resolves against `[models."..."]` keys in your own config. Those keys are namespaced by provider, so a default install gives you `kimi-code/k3`, `kimi-code/kimi-for-coding` and `kimi-code/kimi-for-coding-highspeed`. The bare names are rejected. `kimi-code/k3` already declares `max_context_size = 1048576`, so there is no context suffix to add. Because the valid keys depend on your own config, the manifest ships no `supported_models` allowlist.
 
+> **Note on `kimi` reasoning depth:** K3 accepts three reasoning efforts, `low`, `high` and `max`. The CLI defaults to `max`, the slowest, while the API's own default is `high`. clink has no per-call effort argument, so set it per-home in `$KIMI_CODE_HOME/config.toml`:
+>
+> ```toml
+> [thinking]
+> enabled = true
+> effort = "high"
+> ```
+>
+> This applies under `KIMI_MODEL_*` env auth even though those vars write no model table, which is worth stating because `-m` does *not* work on that route. Measured on one reasoning prompt through the env-auth path: `low` 36s against `max` 55s. Prefer `low` for bounded review work, which is the prompt shape that behaves best here anyway ("at most 3 findings, one line each, then stop").
+
+> **Note on Kimi as a custom *provider*** (as opposed to a clink target — pointing `CUSTOM_API_URL` at `https://api.kimi.com/coding/v1` to reach K3 from `chat`, `codereview`, `consensus` and friends): as of July 2026 every model on that endpoint rejects any temperature other than `1`, returning `400 invalid temperature: only 1 is allowed for this model`. This is independent of `reasoning_effort` — a plain request at temperature `0.3` fails too. Declare `"temperature_constraint": "fixed"` on those entries in your `custom_models.json`, which pins the value to 1.0. Leave `"supports_temperature": true` alongside it: setting it to `false` also suppresses `max_tokens`, since the provider gates both on the same flag. Add `"supported_reasoning_efforts": ["low", "high", "max"]` to the `k3` entry to make `thinking_mode` control its reasoning depth; the two `kimi-for-coding` models report no `think_efforts` and should not declare it.
+>
+> Note also that this endpoint answers HTTP 200 for *any* model id, serving its default rather than erroring, so a typo in a model name routes silently to `k3` instead of failing. Only `GET /coding/v1/models` is authoritative about what exists — model IDs cannot be discovered by probing.
+
 > **Note on opencode/crush/amp read-only mode:** none of these three expose a native flag for read-only-while-still-executing semantics. Read-only enforcement falls back to prompt-level instruction plus a post-execution filesystem snapshot diff, both CLI-agnostic. `kimi` shares that gap and takes the same fallback, though its own note above applies first: it also accepts static `config.toml` permission rules, which act before anything reaches the snapshot stage. CLI bookkeeping that each CLI creates on first-run (`.opencode/...`, `.crush/...`) is classified separately under `read_only_violations.by_cli_bookkeeping` so it doesn't drown out genuine model-write detection. Aider is the exception: its documented `--dry-run` flag provides native read-only enforcement, supplemented by snapshot verification.
 
 > **Recursion guard for MCP-aware CLIs:** Crush, Amp and Kimi Code CLI all support user-defined MCP servers. Kimi Code CLI reads them from `.kimi-code/mcp.json` rather than a subcommand, so `kimi --help` gives no hint that it hosts them. If you wire Unison as an MCP server in any of their configs AND invoke `clink with cli_name="crush"` (or `"amp"`, or `"kimi"`) from a Unison-aware CLI, you'd create a context-window-exploding loop. A cross-cutting guard at `CLinkTool.execute()` reads `UNISON_CLINK_DEPTH` from the environment and refuses invocations beyond `CLINK_MAX_RECURSION_DEPTH` (default 1) with a clear remediation message. Applies to ALL spawned CLIs.
