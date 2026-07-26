@@ -25,6 +25,22 @@
   },
   "models": [
     {
+      "model_name": "anthropic/claude-opus-5",
+      "aliases": [
+        "opus5",
+        "claude-opus-5"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_extended_thinking": false,
+      "supports_json_mode": false,
+      "supports_function_calling": false,
+      "supports_images": true,
+      "max_image_size_mb": 5.0,
+      "description": "Claude Opus 5 - Anthropic's frontier model (released 25 Jul 2026); matches Fable 5 capability at half the price ($5/$25 per M). Anthropic seat on the high tier council.",
+      "intelligence_score": 19
+    },
+    {
       "model_name": "anthropic/claude-opus-4.8",
       "aliases": [
         "opus",
