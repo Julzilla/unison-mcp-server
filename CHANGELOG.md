@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pinned the `mcp` SDK below v2.** The dependency was declared as `mcp>=1.0.0`, so a fresh resolution on 29 July 2026 pulled the new v2 SDK, which removed `Server.list_tools` and killed the server at import (`AttributeError: 'Server' object has no attribute 'list_tools'` in `handlers/tool_handlers.py`). Both `pyproject.toml` and `requirements.txt` now declare `mcp>=1.0.0,<2`; existing installs with a lockfile were unaffected, but any fresh `uvx`/`pip` install since the v2 release was broken. Migrating to the v2 SDK is future work.
+
 - **Consensus panels with 2+ Gemini models no longer fail with "Cannot send a request, as the client has been closed."** The Gemini provider's lazy `client` property was not thread-safe. Consensus dispatches every consultation concurrently via `asyncio.to_thread` against the one registry-cached `GeminiModelProvider`, so on the first Gemini use of a session each worker thread constructed its own `genai.Client` and overwrote `self._client`. An overwritten wrapper loses its last reference as soon as the constructing thread resolves `.models`, and `genai.Client.__del__` closes its httpx transport — killing the sibling request still in flight on it (only the last-assigned client survived, which is why one Gemini model in a panel would succeed and individual re-runs always worked). Client construction is now guarded by a double-checked `_client_init_lock`, matching the OpenAI/Azure fix from the v12.0.0 audit (C-5), which had missed this provider. Reproduced live pre-fix (6 synchronized flash calls) and verified 10 clean rounds post-fix; regression test in `tests/test_gemini_client_thread_safety.py`.
 
 ## [12.0.0] - 2026-07-12
