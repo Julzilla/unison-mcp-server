@@ -79,7 +79,7 @@ class TestOpenRouterProvider:
         provider = OpenRouterProvider(api_key="test-key")
 
         # Test alias resolution
-        assert provider._resolve_model_name("opus") == "anthropic/claude-opus-4.8"
+        assert provider._resolve_model_name("opus") == "anthropic/claude-opus-5"
         assert provider._resolve_model_name("opus4.5") == "anthropic/claude-opus-4.5"
         assert provider._resolve_model_name("opus4.1") == "anthropic/claude-opus-4.1"
         assert provider._resolve_model_name("sonnet") == "anthropic/claude-sonnet-5"
@@ -93,7 +93,7 @@ class TestOpenRouterProvider:
         assert provider._resolve_model_name("mistral") == "mistralai/mistral-large-2411"
         assert provider._resolve_model_name("grok-4") == "x-ai/grok-4"
         assert provider._resolve_model_name("grok4") == "x-ai/grok-4"
-        assert provider._resolve_model_name("grok") == "x-ai/grok-4.20"
+        assert provider._resolve_model_name("grok") == "x-ai/grok-4.5"
         assert provider._resolve_model_name("deepseek") == "deepseek/deepseek-v4-pro"
         assert provider._resolve_model_name("r1") == "deepseek/deepseek-r1-0528"
 

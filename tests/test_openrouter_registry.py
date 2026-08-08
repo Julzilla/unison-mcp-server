@@ -88,7 +88,7 @@ class TestOpenRouterModelRegistry:
 
         # Test various aliases
         test_cases = [
-            ("opus", "anthropic/claude-opus-4.8"),  # bare alias tracks the frontier
+            ("opus", "anthropic/claude-opus-5"),  # bare alias tracks the frontier
             ("OPUS", "anthropic/claude-opus-4.8"),  # Case insensitive
             ("claude-opus", "anthropic/claude-opus-4.8"),
             ("opus4.5", "anthropic/claude-opus-4.5"),  # version-pinned aliases stay put
