@@ -306,3 +306,124 @@ class TestEndToEndDispatch:
 
         assert "path" in captured_path
         assert not Path(captured_path["path"]).exists()
+
+
+# ---------------------------------------------------------------------------
+# Per-call working_dir override
+# ---------------------------------------------------------------------------
+
+
+class TestWorkingDirOverride:
+    _STDOUT = b'{"type":"item.completed","item":{"id":"x","type":"agent_message","text":"ok"}}\n'
+
+    @pytest.mark.asyncio
+    async def test_per_call_working_dir_reaches_subprocess_cwd(self, monkeypatch, tmp_path) -> None:
+        agent, role = _make_agent()
+        process = _StubProcess(stdout=self._STDOUT)
+        captured: dict[str, Any] = {}
+
+        async def fake_exec(*args, **kwargs):
+            captured["cwd"] = kwargs.get("cwd")
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        await agent.run(role=role, prompt="hello", files=[], images=[], working_dir=tmp_path)
+        assert captured["cwd"] == str(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_omitted_working_dir_inherits_server_cwd(self, monkeypatch) -> None:
+        agent, role = _make_agent()  # synthetic client has working_dir=None
+        process = _StubProcess(stdout=self._STDOUT)
+        captured: dict[str, Any] = {}
+
+        async def fake_exec(*args, **kwargs):
+            captured["cwd"] = kwargs.get("cwd")
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        await agent.run(role=role, prompt="hello", files=[], images=[])
+        assert captured["cwd"] is None
+
+
+# ---------------------------------------------------------------------------
+# Host cancellation must reap the CLI subprocess (no orphaned agents)
+# ---------------------------------------------------------------------------
+
+
+class TestHostCancellationReapsSubprocess:
+    @pytest.mark.asyncio
+    async def test_cancellation_kills_process_tree(self, monkeypatch) -> None:
+        agent, role = _make_agent()
+
+        class _HangingProcess:
+            def __init__(self) -> None:
+                self.returncode = None
+
+            async def communicate(self, *_args):
+                await asyncio.Event().wait()  # blocks until cancelled
+
+            def kill(self) -> None:
+                pass
+
+        process = _HangingProcess()
+        reaped: dict[str, Any] = {}
+        monkeypatch.setattr(agent, "_terminate_process_tree", lambda p: reaped.setdefault("proc", p))
+
+        async def fake_exec(*args, **kwargs):
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        task = asyncio.create_task(agent.run(role=role, prompt="x", files=[], images=[]))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert reaped.get("proc") is process
+
+
+# ---------------------------------------------------------------------------
+# Nonzero exits surface the CLI's own stderr in the error message
+# ---------------------------------------------------------------------------
+
+
+class TestNonzeroExitErrorMessage:
+    @pytest.mark.asyncio
+    async def test_stderr_excerpt_reaches_error_message(self, monkeypatch) -> None:
+        agent, role = _make_agent()
+        process = _StubProcess(
+            stdout=b"",
+            stderr=b"Error: Access denied by policy settings (Request ID: X)\nYour Copilot CLI policy...\n",
+            returncode=1,
+        )
+
+        async def fake_exec(*args, **kwargs):
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        with pytest.raises(CLIAgentError) as exc_info:
+            await agent.run(role=role, prompt="x", files=[], images=[])
+        assert "exited with status 1" in str(exc_info.value)
+        assert "Access denied by policy settings" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_empty_stderr_keeps_plain_message(self, monkeypatch) -> None:
+        agent, role = _make_agent()
+        process = _StubProcess(stdout=b"", stderr=b"", returncode=2)
+
+        async def fake_exec(*args, **kwargs):
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        with pytest.raises(CLIAgentError) as exc_info:
+            await agent.run(role=role, prompt="x", files=[], images=[])
+        assert str(exc_info.value).endswith("exited with status 2")

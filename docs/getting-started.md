@@ -31,6 +31,10 @@ You need at least one API key. Choose based on your needs:
 - Visit [OpenAI Platform](https://platform.openai.com/api-keys)
 - Generate an API key for GPT-5.2, GPT-5.1-Codex, GPT-5, O3 access
 
+**Anthropic (Claude):**
+- Visit [Anthropic Console](https://console.anthropic.com/)
+- Generate an API key for native Claude access (Fable 5, Opus 5/4.8, Sonnet 5/4.6, Haiku 4.5) with extended thinking
+
 **X.AI (Grok):**
 - Visit [X.AI Console](https://console.x.ai/)
 - Generate an API key for Grok models
@@ -288,6 +292,7 @@ Add your API keys (at least one required):
 # Choose your providers (at least one required)
 GEMINI_API_KEY=your-gemini-api-key-here      # For Gemini models  
 OPENAI_API_KEY=your-openai-api-key-here      # For GPT-5.2, GPT-5.1-Codex, O3
+ANTHROPIC_API_KEY=your-anthropic-api-key-here  # For native Claude (Fable, Opus, Sonnet, Haiku)
 XAI_API_KEY=your-xai-api-key-here            # For Grok models
 OPENROUTER_API_KEY=your-openrouter-key       # For multiple models
 
@@ -309,7 +314,9 @@ Some MCP clients default to short timeouts and can disconnect from Unison during
 
 ### Claude Code & Claude Desktop
 
-Claude reads MCP-related environment variables either from your shell or from `~/.claude/settings.json`. Add (or update) the `env` block so both startup and tool execution use a 5-minute limit:
+**The setup scripts handle this automatically:** when `run-server.sh` / `run-server.ps1` detect Claude (CLI or Desktop), they add `MCP_TOOL_TIMEOUT=900000` (15 minutes) to the top-level `env` block of `~/.claude/settings.json` — creating the file if needed, backing it up first, and never overwriting a value you already set. Restart your Claude sessions afterward for it to apply.
+
+To tune it manually: Claude reads MCP-related environment variables either from your shell or from `~/.claude/settings.json`. Add (or update) the `env` block:
 
 ```json
 {
@@ -320,7 +327,7 @@ Claude reads MCP-related environment variables either from your shell or from `~
 }
 ```
 
-You can scope this block at the top level of `settings.json` (applies to every session) or under a specific `mcpServers.<name>.env` entry if you only want it for Unison (the server name may still be `unison` while configurations catch up). The values are in milliseconds. Note: Claude’s SSE transport still enforces an internal ceiling of roughly five minutes; long-running HTTP/SSE servers may need retries until Anthropic ships their fix.
+Scope this block at the **top level** of `settings.json` — it configures the Claude client itself. Do **not** put these under `mcpServers.<name>.env`: that environment is passed to the spawned MCP *server* process, not to the client enforcing the timeout, so it has no effect on the deadline. The values are in milliseconds. Claude Desktop's local (embedded Claude Code) sessions honor the same top-level `env` block — or set it via Desktop's local environment editor — then start a new session or fully restart Desktop from the tray. Note: Claude's SSE transport still enforces an internal ceiling of roughly five minutes; long-running HTTP/SSE servers may need retries until Anthropic ships their fix.
 
 ### Codex CLI
 

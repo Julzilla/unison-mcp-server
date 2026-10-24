@@ -28,12 +28,14 @@ Gemini · OpenAI · Anthropic · Grok · Kimi K3 · Azure · Ollama · OpenRoute
 
 ## What this fork adds over PAL
 
-Unison forks [BeehiveInnovations/pal-mcp-server](https://github.com/BeehiveInnovations/pal-mcp-server) and preserves every PAL tool, provider, and workflow. On top of that, it changes what's possible in four ways:
+Unison forks [BeehiveInnovations/pal-mcp-server](https://github.com/BeehiveInnovations/pal-mcp-server) and preserves every PAL tool, provider, and workflow. On top of that, it changes what's possible in six ways:
 
-- 🔗 **CLI-to-CLI orchestration.** The new [`clink`](docs/tools/clink.md) tool spawns **eight** subagents (Claude Code, Codex, Gemini CLI, opencode, Aider, Crush, Amp, and Kimi Code CLI) in isolated contexts, with role presets, read-only enforcement (native CLI flags + post-call filesystem-snapshot diff), and a cross-cutting recursion guard for MCP-aware CLIs. **PAL has no equivalent.**
+- 🔗 **CLI-to-CLI orchestration.** The new [`clink`](docs/tools/clink.md) tool spawns **nine** subagents — Claude Code, Codex, Gemini CLI, opencode, Aider, Crush, Amp, GitHub Copilot CLI, and Kimi Code CLI — in isolated contexts with role presets, read-only enforcement (native CLI flags + post-call filesystem-snapshot diff), and a cross-cutting recursion guard for MCP-aware CLIs. **PAL has no equivalent.**
 - 🌐 **75+ providers through one integration.** clink + opencode routes a single call to OpenAI, Anthropic, Google, Ollama, OpenRouter, xAI, Mistral, Groq, DeepSeek, and ~70 more via `provider/model` syntax. No per-provider implementation work.
 - 🧠 **2000+ models, auto-discovered.** Every model from every authenticated provider appears at startup via [LiteLLM](https://github.com/BerriAI/litellm); a **weekly CI workflow** opens a PR with the latest catalog. Auto-mode picks the smartest available model using `intelligence_score`, not hardcoded preference lists that go stale.
+- ⚡ **Native Anthropic provider.** `ANTHROPIC_API_KEY` activates Claude directly over the Messages API — a curated latest-two-generations catalog (Fable 5, Opus 5 / 4.8, Sonnet 5 / 4.6, Haiku 4.5) with real extended-thinking budgets mapped from Unison's thinking modes. The `opus` / `sonnet` / `haiku` / `claude` aliases resolve natively ahead of OpenRouter. **PAL reaches Claude only through OpenRouter.**
 - 🛡️ **Production reliability.** Optional **SQLite conversation backend** survives restarts; a **per-provider circuit breaker** fails fast on outages so consensus doesn't hang on a dead provider.
+- 🔌 **Pip-installable tool plugins.** Third-party packages add tools via `[project.entry-points."unison.tools"]` — validated, quarantined on failure, never able to crash the server ([guide](docs/plugins.md)). Opt-in **structured observability**: JSON activity logs (`UNISON_JSON_LOGS`) and OpenTelemetry spans/metrics per tool call (`UNISON_OTEL_ENABLED`), credential-redacted end to end.
 
 **Migration is lossless** — every PAL tool, provider, and workflow is preserved. The [full PAL vs Unison comparison](#pal-vs-unison-full-comparison) below breaks down each capability.
 
@@ -52,7 +54,7 @@ Unison forks [BeehiveInnovations/pal-mcp-server](https://github.com/BeehiveInnov
 
 The new **[`clink`](docs/tools/clink.md)** (CLI + Link) tool connects external AI CLIs directly into your workflow:
 
-- **Connect external CLIs** like [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex CLI](https://github.com/openai/codex), [Claude Code](https://www.anthropic.com/claude-code), [opencode](https://opencode.ai), [Aider](https://aider.chat), [Crush](https://github.com/charmbracelet/crush), [Amp](https://ampcode.com), and [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code) directly into your workflow
+- **Connect external CLIs** like [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex CLI](https://github.com/openai/codex), [Claude Code](https://www.anthropic.com/claude-code), [opencode](https://opencode.ai), [Aider](https://aider.chat), [Crush](https://github.com/charmbracelet/crush), [Amp](https://ampcode.com), [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli), and [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code) directly into your workflow
 - **CLI Subagents** - Launch isolated CLI instances from _within_ your current CLI! Claude Code can spawn Codex subagents, Codex can spawn Gemini CLI subagents, etc. Offload heavy tasks (code reviews, bug hunting) to fresh contexts while your main session's context window remains unpolluted. Each subagent returns only final results.
 - **Context Isolation** - Run separate investigations without polluting your primary workspace
 - **Role Specialization** - Spawn `planner`, `codereviewer`, or custom role agents with specialized system prompts
@@ -80,7 +82,9 @@ Continue with clink gemini - implement the recommended feature
 
 ## How to clink
 
-The `clink` tool takes four parameters that matter day-to-day: `cli_name`, `role`, `model`, and `read_only`. Everything else (file attachments, continuation IDs) works the same as any other Unison tool.
+The `clink` tool takes five parameters that matter day-to-day: `cli_name`, `role`, `model`, `read_only`, and `working_dir`. Everything else (file attachments, continuation IDs) works the same as any other Unison tool.
+
+Long runs can't be killed by your MCP host's tool timeout: every `clink` call waits a bounded ~45s, and a CLI that needs longer returns `status: "running"` with a `job_id` — call `clink` again with just that `job_id` to keep waiting (or `cancel: true` to abort), and the full result arrives the moment the CLI finishes. Fast runs are byte-identical to a normal blocking call. See [docs/tools/clink.md](docs/tools/clink.md) for the contract.
 
 ### Basic invocation
 
@@ -98,6 +102,11 @@ clink with opencode using openai/gpt-5 to write a property-based test suite
 
 # Read-only mode (analysis without file writes)
 clink with claude codereviewer in read-only mode to review PR #482
+
+# Point the spawned CLI at your project/worktree root so it can see your files
+# (important when the MCP server runs elsewhere — e.g. spawned by Claude Desktop,
+#  or when you work in a git worktree; Copilot's file tools are rooted at its cwd)
+clink with copilot working_dir="/abs/path/to/your/repo" to summarize this codebase
 ```
 
 ### Supported CLIs
@@ -112,6 +121,9 @@ clink with claude codereviewer in read-only mode to review PR #482
 | `crush` | Charm-built multi-provider TUI / CLI, `provider/model` syntax for routing | _(none — prompt + snapshot)_ |
 | `amp` | Sourcegraph-backed, code-search-aware tools, structured JSONL output, image input via `--stream-json-input` | _(none — prompt + snapshot)_ |
 | `kimi` | Kimi K3 on a Kimi Code subscription, 1M context window, JSONL output with session IDs for resume | _(none, see note)_ |
+| `copilot` | GitHub-backed, available on every Copilot plan; native image/PDF attachments; BYOK support for routing to your own provider | `--available-tools view,grep,glob` (fail-closed) |
+
+> **Note on copilot read-only mode:** Copilot is the only target that restricts the model's *tool schema* rather than gating tool use. `--available-tools` is an allowlist, so a tool added by a future Copilot release is excluded by default instead of silently permitted — measured on CLI 1.0.78, it cuts the schema from 23 tools to exactly 3, including removal of MCP server tools. This is application-level enforcement, not an OS sandbox like Codex's `--sandbox read-only`, and it trades away shell access: `git diff` is unavailable under `read_only=true`, though the native `view`/`grep`/`glob` tools cover most read needs.
 
 > **Note on `kimi` read-only mode:** Kimi has no read-only flag. `--prompt` runs in `auto` permission mode and the CLI rejects `--yolo`, `--auto` and `--plan` alongside it, so an unconstrained run WILL write files. Constrain it with static `[[permission.rules]]` in `$KIMI_CODE_HOME/config.toml`, denying `Write` and `Edit` at minimum. Two measured gotchas: a `deny` beats an `allow` regardless of rule order, so a catch-all `deny Bash` silently nullifies every `allow Bash(...)` above it; and argument-pattern globs such as `Bash(*>*)` do not reliably block what they appear to. Verify any rule change by checking the filesystem, not the denial message.
 
@@ -160,6 +172,7 @@ opencode providers list                   # check which providers are authentica
 | `crush` | `crush models` (local) | `provider/model` (e.g. `anthropic/claude-sonnet-4-5`, `openai/gpt-4o`) — same shape as opencode |
 | `kimi` | `grep '^\[models\.' $KIMI_CODE_HOME/config.toml` for `-m` values · `GET api.kimi.com/coding/v1/models` (authoritative, per-account) for `KIMI_MODEL_NAME` values | **Depends on your auth**, see the model-selection note above. `-m` takes provider-namespaced config keys (`kimi-code/k3`); `KIMI_MODEL_NAME` takes API model IDs (`k3`, `kimi-for-coding`) |
 | `amp` | `amp --help` · [Amp owner's manual](https://ampcode.com/manual) | **Named modes only**: `deep`, `large`, `rush`, `smart` (mapped to `--mode`, not arbitrary model strings) |
+| `copilot` | `copilot help` · [Copilot CLI reference](https://docs.github.com/copilot/reference/copilot-cli-reference/cli-programmatic-reference) | model IDs (e.g. `gpt-5.3-codex`, `claude-sonnet-4.6`, `claude-haiku-4.5`) via `--model` |
 
 **Validation behavior:** the `model` field is free-text — invalid values come back as a CLI-level error in response metadata, not a schema rejection. Authentication for opencode providers is opencode's own concern (`opencode auth`); Unison doesn't manage credentials.
 
@@ -268,7 +281,7 @@ and review into consideration to aid with its final pre-commit review.
 
 For best results when using [Claude Code](https://claude.ai/code):  
 
-- **Sonnet 4.5** - All agentic work and orchestration
+- **Sonnet 4.6 / Sonnet 5** - All agentic work and orchestration
 - **Gemini 3.0 Pro** OR **GPT-5.2 / Pro** - Deep thinking, additional code reviews, debugging and validations, pre-commit analysis
 </details>
 
@@ -287,15 +300,17 @@ Unison inherits the entire PAL feature set. Every row below is an addition or ha
 
 | Capability | PAL MCP | Unison MCP |
 |---|---|---|
-| **CLI-to-CLI orchestration** | — | **`clink`** spawns **8 CLIs** as subagents: Claude, Codex, Gemini, opencode, Aider, Crush, Amp, Kimi — with role presets (`planner`, `codereviewer`), optional `supported_models` allowlist per CLI, and a cross-cutting recursion guard for MCP-aware targets |
+| **CLI-to-CLI orchestration** | — | **`clink`** spawns **9 CLIs** as subagents — Claude, Codex, Gemini, opencode, Aider, Crush, Amp, GitHub Copilot, Kimi — with role presets (`planner`, `codereviewer`), optional `supported_models` allowlist per CLI, and a cross-cutting recursion guard for MCP-aware targets |
 | **Read-only mode for sub-CLIs** | — | Native CLI flags (`--sandbox read-only`, `--approval-mode plan`, `--permission-mode plan`, `--dry-run`) + prompt instruction + full-tree post-call filesystem-snapshot diff; `read_only_enforced` metadata reflects whether a real sandbox flag was applied; CLI bookkeeping (e.g. `.opencode/`) classified separately so it doesn't drown out genuine model writes |
 | **Provider reach via one integration** | One provider per implementation | **75+ providers** through opencode via `provider/model` syntax (OpenAI, Anthropic, Google, Ollama, OpenRouter, xAI, Mistral, Groq, DeepSeek, …) |
+| **Native Anthropic (Claude) provider** | — (Claude reachable only via OpenRouter) | `ANTHROPIC_API_KEY` activates the Messages API directly: latest-two-generations catalog (Fable 5, Opus 5/4.8, Sonnet 5/4.6, Haiku 4.5), extended-thinking budgets per thinking mode, `ANTHROPIC_ALLOWED_MODELS` restrictions, `ANTHROPIC_API_URL` gateway override |
 | **Model catalog** | Static JSON files, manually curated — go stale the day a provider ships a new model | **2000+ models auto-discovered** via [LiteLLM](https://github.com/BerriAI/litellm) at startup, with curated overrides for tuned metadata |
 | **Discovered vs curated** | All models treated equally | `listmodels` distinguishes curated (hand-tuned `intelligence_score`, aliases) from auto-discovered |
 | **Auto-mode model selection** | Hardcoded preference lists per provider | Data-driven using `intelligence_score` and capability flags — newly discovered high-scoring models surface automatically |
 | **Catalog freshness** | Manual JSON updates only | **Weekly CI workflow** fetches the latest LiteLLM catalog and opens a PR for human review |
 | **Conversation persistence** | In-memory only — lost on restart | Optional **SQLite backend** (`STORAGE_BACKEND=sqlite`), zero-config |
 | **Provider failure handling** | Wait through the full retry cycle on every call | **Per-provider circuit breaker** — fails fast after N consecutive failures, auto-probes recovery; consensus skips dead providers and synthesizes from the rest |
+| **Install reproducibility & SDK currency** | Open version ranges resolved at install time | **Locked installs** — `uv.lock` plus committed pip exports consumed by the setup scripts, CI, and Docker, with a CI drift check (the wheel smoke test deliberately still canaries open ranges); runs on the **mcp 2.x SDK** with wire-level equivalence to the 1.x behavior verified against captured fixtures |
 
 > All core tools, providers, workflows, and conversation continuity features from PAL are fully preserved. See [docs/name-change.md](docs/name-change.md) for migration notes.
 >
@@ -310,6 +325,7 @@ Unison inherits the entire PAL feature set. Every row below is an addition or ha
 - **[Gemini](https://makersuite.google.com/app/apikey)** - Google's latest models
 - **[OpenAI](https://platform.openai.com/api-keys)** - O3, GPT-5 series
 - **[Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/)** - Enterprise deployments of GPT-4o, GPT-4.1, GPT-5 family
+- **[Anthropic](https://console.anthropic.com/)** - Claude models (Fable, Opus, Sonnet, Haiku) with native extended thinking
 - **[X.AI](https://console.x.ai/)** - Grok models
 - **[DIAL](https://dialx.ai/)** - Vendor-agnostic model access
 - **[Ollama](https://ollama.ai/)** - Local models (free)
@@ -323,10 +339,28 @@ git clone https://github.com/izzoa/unison-mcp-server.git
 cd unison-mcp-server
 
 # Handles everything: setup, config, API keys from system environment. 
-# Auto-configures Claude Desktop, Claude Code, Gemini CLI, Codex CLI, Qwen Code CLI
+# Auto-configures Claude Desktop, Claude Code, Gemini CLI, Codex CLI, Qwen Code CLI,
+# VS Code, VS Code Insiders, Cursor, Windsurf, and Trae (same host set on Windows)
 # Enable / disable additional settings in .env
 ./run-server.sh  
 ```
+
+**On Windows, use `run-server.ps1` instead — WSL is not required.** It is native PowerShell and invokes no bash.
+
+> **Requires PowerShell 7.0+.** The Windows PowerShell 5.1 that ships with Windows 10/11 cannot parse this script. Install it with `winget install --id Microsoft.PowerShell --source winget`, then run `pwsh` rather than `powershell`.
+
+```powershell
+git clone https://github.com/izzoa/unison-mcp-server.git
+cd unison-mcp-server
+
+# Windows blocks unsigned scripts by default; allow it for this shell only
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
+
+.\run-server.ps1
+```
+
+>
+> `Set-ExecutionPolicy -Scope Process` applies to the current shell only and needs no administrator rights, but it **cannot** override a `MachinePolicy` or `UserPolicy` set by Group Policy — those take precedence. On a managed machine, contact your administrator.
 
 **Option B: Instant Setup with [uvx](https://docs.astral.sh/uv/getting-started/installation/)**
 ```json
@@ -357,7 +391,7 @@ cd unison-mcp-server
 ```
 
 👉 **[Complete Setup Guide](docs/getting-started.md)** with detailed installation, configuration for Gemini / Codex / Qwen, and troubleshooting
-👉 **[Cursor & VS Code Setup](docs/getting-started.md#ide-clients)** for IDE integration instructions
+👉 **[Cursor & VS Code Setup](docs/getting-started.md#ide-clients-cursor--vs-code)** for IDE integration instructions
 📺 **[Watch tools in action](#-watch-tools-in-action)** to see real-world examples
 
 ## Provider Configuration
@@ -402,7 +436,7 @@ Unison activates any provider that has credentials in your `.env`. See `.env.exa
 To optimize context window usage, only essential tools are enabled by default:
 
 **Enabled by default:**
-- `chat`, `thinkdeep`, `planner`, `consensus` - Core collaboration tools
+- `clink`, `chat`, `thinkdeep`, `planner`, `consensus` - Core collaboration tools
 - `codereview`, `precommit`, `debug` - Essential code quality tools
 - `apilookup` - Rapid API/SDK information lookup
 - `challenge` - Critical thinking utility
@@ -582,8 +616,8 @@ DISABLED_TOOLS=
 - **[Context revival](docs/context-revival.md)** - Continue conversations even after context resets
 
 **Model Support**
-- **Multiple providers** - Gemini, OpenAI, Azure, X.AI, OpenRouter, DIAL, Ollama
-- **Latest models** - GPT-5, Gemini 3.0 Pro, O3, Grok-4, local Llama
+- **Multiple providers** - Gemini, OpenAI, Anthropic, Azure, X.AI, OpenRouter, DIAL, Ollama
+- **Latest models** - Claude Fable 5 / Opus 5, GPT-5, Gemini 3.0 Pro, O3, Grok-4, local Llama
 - **Automatic model discovery** - New models appear at startup via [LiteLLM](https://github.com/BerriAI/litellm) integration, no manual config needed
 - **[Thinking modes](docs/advanced-usage.md#thinking-modes)** - Control reasoning depth vs cost
 - **Vision support** - Analyze images, diagrams, screenshots
@@ -628,7 +662,7 @@ DISABLED_TOOLS=
 - [Model Ranking Guide](docs/model_ranking.md) - How intelligence scores drive auto-mode suggestions
 
 **🔧 Setup & Support**
-- [WSL Setup](docs/wsl-setup.md) - Windows users
+- [WSL Setup](docs/wsl-setup.md) - Optional for Windows; `run-server.ps1` is native and needs no WSL
 - [Troubleshooting](docs/troubleshooting.md) - Common issues
 - [Contributing](docs/contributions.md) - Code standards, PR process
 

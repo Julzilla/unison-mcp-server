@@ -2,31 +2,43 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from mcp.types import TextContent
 from pydantic import BaseModel, Field
 
 from clink import get_registry
 from clink.agents import AgentOutput, CLIAgentError, create_agent
-from clink.constants import (
-    CLI_DISPLAY_NAMES,
-    CLINK_DEPTH_ENV_VAR,
-    CLINK_MAX_DEPTH_ENV_VAR,
-    DEFAULT_CLINK_MAX_DEPTH,
-)
+from clink.constants import CLINK_DEPTH_ENV_VAR, CLINK_MAX_DEPTH_ENV_VAR, DEFAULT_CLINK_MAX_DEPTH
 from clink.models import ResolvedCLIClient, ResolvedCLIRole
 from config import TEMPERATURE_BALANCED
+from tools.clink_jobs import ClinkJob, get_clink_job_manager
 from tools.models import ToolModelCategory, ToolOutput
 from tools.shared.base_models import COMMON_FIELD_DESCRIPTIONS
 from tools.shared.exceptions import ToolExecutionError
 from tools.simple.base import SchemaBuilder, SimpleTool
-from utils.fs_snapshot import capture_snapshot, classify_changes, diff_snapshots
+from utils.env import get_env
+from utils.fs_snapshot import SnapshotStats, capture_snapshot, classify_changes, diff_snapshots
+from utils.mcp_context import get_current_request_context
+
+#: clink arguments that steer job control rather than the CLI run itself;
+#: stripped before arguments reach the blocking execution path.
+_JOB_CONTROL_KEYS = frozenset({"job_id", "cancel", "wait_seconds", "idempotency_key"})
+
+# Wall-clock ceiling for each read-only verification snapshot. Observed live:
+# an unbounded walk of a large OneDrive-synced repo took 60-90s per snapshot
+# (twice per call), starving the actual CLI run of the MCP host's tool-timeout
+# budget. Override with CLINK_SNAPSHOT_BUDGET_SECONDS.
+_DEFAULT_SNAPSHOT_BUDGET_SECONDS = 30.0
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +86,40 @@ def _check_recursion_guard() -> None:
 class CLinkRequest(BaseModel):
     """Request model for clink tool."""
 
-    prompt: str = Field(..., description="Prompt forwarded to the target CLI.")
+    prompt: str | None = Field(
+        default=None,
+        description="Prompt forwarded to the target CLI. Required when starting a run; omit with job_id.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Continue a previous clink call that returned status='running'. Pass ONLY the job_id "
+            "(optionally with wait_seconds or cancel); the call waits for the running CLI and "
+            "returns its full result when finished."
+        ),
+    )
+    cancel: bool = Field(
+        default=False,
+        description="With job_id: cancel the running job and kill the CLI's process tree.",
+    )
+    wait_seconds: int | None = Field(
+        default=None,
+        description="How long this call may wait before returning a still-running job payload (0-50, default 45).",
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        description=(
+            "Optional client-chosen key. Retrying a start call with the same key while the original "
+            "run is still going returns the existing job instead of launching duplicate paid CLI work."
+        ),
+    )
     cli_name: str | None = Field(
         default=None,
-        description="Configured CLI client name to invoke. Defaults to the first configured CLI if omitted.",
+        description=(
+            "Configured CLI client name to invoke. Required when more than one CLI is "
+            "configured; may be omitted only when a single CLI is configured, in which case "
+            "that one is used."
+        ),
     )
     role: str | None = Field(
         default=None,
@@ -115,6 +157,16 @@ class CLinkRequest(BaseModel):
             "otherwise invalid model strings surface as CLI-level errors in response metadata."
         ),
     )
+    working_dir: str | None = Field(
+        default=None,
+        description=(
+            "Absolute path to the directory the spawned CLI should run in. Pass your project or "
+            "worktree root so the CLI can see your files — some CLIs (e.g. Copilot) root their "
+            "file tools at their working directory and refuse paths outside it. When omitted, "
+            "falls back to the CLI manifest's working_dir, then the MCP server's own working "
+            "directory."
+        ),
+    )
 
 
 class CLinkTool(SimpleTool):
@@ -131,20 +183,63 @@ class CLinkTool(SimpleTool):
         self._cli_names = self._registry.list_clients()
         self._role_map: dict[str, list[str]] = {name: self._registry.list_roles(name) for name in self._cli_names}
         self._all_roles: list[str] = sorted({role for roles in self._role_map.values() for role in roles})
-        if "gemini" in self._cli_names:
-            self._default_cli_name = "gemini"
-        else:
-            self._default_cli_name = self._cli_names[0] if self._cli_names else None
+        # No vendor preference: a single configured client is the only implicit
+        # default. With more than one, `cli_name` is required — see
+        # _resolve_client() and the matching rule in get_input_schema().
+        self._default_cli_name = self._cli_names[0] if len(self._cli_names) == 1 else None
         self._active_system_prompt: str = ""
+        # Background jobs (tools/clink_jobs.py) run execute() on a private
+        # instance after the originating MCP request has already returned;
+        # sending progress against that completed request would violate the
+        # spec, so job runners disable the heartbeat per instance.
+        self._progress_heartbeat_enabled = True
         super().__init__()
+
+    def disable_progress_heartbeat(self) -> None:
+        """Suppress MCP progress notifications for this instance (job mode)."""
+        self._progress_heartbeat_enabled = False
+
+    def _resolve_client(self, cli_name: str | None) -> ResolvedCLIClient:
+        """Resolve the effective CLI client for a request.
+
+        The single resolution path shared by every entry point that assembles a
+        prompt or dispatches to a CLI, so no caller passes an unresolved value
+        into the registry (where ``None`` would surface as an ``AttributeError``
+        rather than an actionable message).
+
+        ``cli_name`` is required whenever more than one client is configured —
+        matching what :meth:`get_input_schema` already advertises. Selecting an
+        arbitrary client instead would silently send the request somewhere the
+        caller did not ask for.
+        """
+        if not self._cli_names:
+            self._raise_tool_error("No CLI clients are configured for clink.")
+
+        selected = (cli_name or "").strip() or self._default_cli_name
+        if not selected:
+            available = ", ".join(self._cli_names)
+            self._raise_tool_error(
+                f"'cli_name' is required when multiple CLI clients are configured. " f"Available clients: {available}."
+            )
+
+        try:
+            return self._registry.get_client(selected)
+        except KeyError as exc:
+            self._raise_tool_error(str(exc))
 
     def get_name(self) -> str:
         return "clink"
 
     def get_description(self) -> str:
+        # Deliberately names no CLI: the generated `cli_name` enum is the
+        # authoritative list of configured targets, and a hardcoded example
+        # list goes stale (this previously advertised Qwen, never a target).
         return (
-            "Link a request to an external AI CLI (Gemini CLI, Qwen CLI, etc.) through Unison MCP to reuse "
-            "their capabilities inside existing workflows."
+            "Link a request to an external AI CLI through Unison MCP to reuse their capabilities "
+            "inside existing workflows. See the 'cli_name' enum for the configured targets. "
+            "Long runs never time out: each call waits a bounded time and returns status='running' "
+            "with a job_id when the CLI needs longer — call clink again with just that job_id to "
+            "keep waiting (cancel=true aborts). Never report the task done before a final result."
         )
 
     def get_annotations(self) -> dict[str, Any]:
@@ -193,7 +288,34 @@ class CLinkTool(SimpleTool):
         properties = {
             "prompt": {
                 "type": "string",
-                "description": "User request forwarded to the CLI (conversation context is pre-applied).",
+                "description": (
+                    "User request forwarded to the CLI (conversation context is pre-applied). "
+                    "Required when starting a run; omit when continuing with job_id."
+                ),
+            },
+            "job_id": {
+                "type": "string",
+                "description": (
+                    "Continue a previous clink call that returned status='running'. Pass ONLY the "
+                    "job_id (optionally wait_seconds or cancel); returns the full result when the "
+                    "CLI finishes, or another running payload to keep polling."
+                ),
+            },
+            "cancel": {
+                "type": "boolean",
+                "default": False,
+                "description": "With job_id: cancel the running job and kill the CLI's process tree.",
+            },
+            "wait_seconds": {
+                "type": "integer",
+                "description": "How long this call may wait before returning a still-running job payload (0-50, default 45).",
+            },
+            "idempotency_key": {
+                "type": "string",
+                "description": (
+                    "Optional client-chosen key: retrying a start with the same key while the original "
+                    "run is still going returns the existing job instead of duplicate paid CLI work."
+                ),
             },
             "cli_name": {
                 "type": "string",
@@ -226,17 +348,26 @@ class CLinkTool(SimpleTool):
                     "response metadata unless the manifest declares a 'supported_models' allowlist."
                 ),
             },
+            "working_dir": {
+                "type": "string",
+                "description": (
+                    "Absolute path to the directory the spawned CLI should run in. Pass your "
+                    "project or worktree root so the CLI can see your files (some CLIs root "
+                    "their file tools at their cwd). Omit to use the CLI manifest's working_dir, "
+                    "then the server's own working directory."
+                ),
+            },
         }
 
+        # No schema-level required fields: a job continuation passes only
+        # job_id, while a start needs prompt (and cli_name when several CLIs
+        # are configured) — both enforced at runtime with actionable errors.
         schema = {
             "type": "object",
             "properties": properties,
-            "required": ["prompt"],
+            "required": [],
             "additionalProperties": False,
         }
-
-        if len(self._cli_names) > 1:
-            schema["required"].append("cli_name")
 
         return schema
 
@@ -244,7 +375,123 @@ class CLinkTool(SimpleTool):
         """Unused by clink because we override the schema end-to-end."""
         return {}
 
+    #: Bounds for how long a single clink call may wait before returning a
+    #: still-running job payload. Kept under every known MCP host tool
+    #: deadline (Claude Desktop's local-agent mode cancels around a minute).
+    _DEFAULT_JOB_WAIT_SECONDS = 45.0
+    _MAX_JOB_WAIT_SECONDS = 50.0
+
     async def execute(self, arguments: dict[str, Any]) -> list[TextContent]:
+        """Dispatcher: start a run (bounded wait) or continue/cancel a job.
+
+        Every call returns within the wait budget. Runs finishing inside it
+        return exactly what a blocking call would have returned; longer runs
+        return a job payload whose job_id continues the wait on the next call.
+        ``CLINK_EXECUTION_MODE=blocking`` restores the pure blocking behavior.
+        """
+        job_id = str(arguments.get("job_id") or "").strip()
+        if job_id:
+            return await self._continue_job(job_id, arguments)
+
+        if not str(arguments.get("prompt") or "").strip():
+            self._raise_tool_error(
+                "prompt is required to start a clink run (or pass job_id to continue a previous one)."
+            )
+
+        mode = (get_env("CLINK_EXECUTION_MODE") or "hybrid").strip().lower()
+        if mode == "blocking":
+            return await self._execute_blocking(arguments)
+
+        run_args = {k: v for k, v in arguments.items() if k not in _JOB_CONTROL_KEYS}
+        manager = get_clink_job_manager()
+        job = manager.start(run_args, idempotency_key=arguments.get("idempotency_key"))
+        await self._wait_for_job(job, self._wait_budget(arguments))
+        return self._job_response(job)
+
+    async def _continue_job(self, job_id: str, arguments: dict[str, Any]) -> list[TextContent]:
+        manager = get_clink_job_manager()
+        if arguments.get("cancel"):
+            job = manager.cancel(job_id)
+            if job is None:
+                self._raise_tool_error(
+                    f"Unknown clink job '{job_id}'. It may have expired or the MCP server restarted "
+                    "(jobs are in-memory)."
+                )
+            await self._wait_for_job(job, 2.0)
+            return self._job_response(job)
+
+        job = manager.get(job_id)
+        if job is None:
+            self._raise_tool_error(
+                f"Unknown clink job '{job_id}'. It may have expired (results are retained ~30 min) "
+                "or the MCP server restarted (jobs are in-memory). Start a new clink run."
+            )
+        await self._wait_for_job(job, self._wait_budget(arguments))
+        return self._job_response(job)
+
+    def _wait_budget(self, arguments: dict[str, Any]) -> float:
+        raw = arguments.get("wait_seconds")
+        if raw is None:
+            return self._DEFAULT_JOB_WAIT_SECONDS
+        try:
+            return max(0.0, min(float(raw), self._MAX_JOB_WAIT_SECONDS))
+        except (TypeError, ValueError):
+            return self._DEFAULT_JOB_WAIT_SECONDS
+
+    async def _wait_for_job(self, job: ClinkJob, budget_seconds: float) -> None:
+        """Wait on the job's done-event, emitting progress heartbeats.
+
+        Waiting is independent of the job task: cancelling this request never
+        cancels the job. Heartbeats come from THIS foreground request (whose
+        progress token is live), not from the background runner.
+        """
+        deadline = time.monotonic() + budget_seconds
+        sequence = 0
+        while not job.done_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            interval = min(self._PROGRESS_HEARTBEAT_INTERVAL_SECONDS, remaining)
+            try:
+                await asyncio.wait_for(job.done_event.wait(), timeout=interval)
+                return
+            except asyncio.TimeoutError:
+                sequence += 1
+                await self._emit_progress(
+                    float(sequence),
+                    f"clink: {job.cli_name} still running ({int(job.elapsed_seconds())}s elapsed)",
+                )
+
+    def _job_response(self, job: ClinkJob) -> list[TextContent]:
+        if job.state == "completed" and job.result_json:
+            # Transparent: exactly what the blocking call would have returned,
+            # continuation offer and metadata included.
+            return [TextContent(type="text", text=job.result_json)]
+        if job.state == "failed" and job.error_json:
+            raise ToolExecutionError(job.error_json)
+
+        payload: dict[str, Any] = {
+            "status": job.state,
+            "job_id": job.job_id,
+            "cli_name": job.cli_name,
+            "elapsed_seconds": round(job.elapsed_seconds(), 1),
+        }
+        if job.state == "running":
+            payload["instructions"] = (
+                "The CLI is still working. Call clink again with ONLY job_id="
+                f"'{job.job_id}' to continue waiting (each call waits up to "
+                f"{int(self._DEFAULT_JOB_WAIT_SECONDS)}s; pass cancel=true to abort). "
+                "Do not report the task as done before receiving the final result."
+            )
+        output = ToolOutput(
+            status="success",
+            content=json.dumps(payload, indent=2),
+            content_type="json",
+            metadata={"tool_name": self.get_name()},
+        )
+        return [TextContent(type="text", text=output.model_dump_json())]
+
+    async def _execute_blocking(self, arguments: dict[str, Any]) -> list[TextContent]:
         # Recursion guard: if we're already running inside a clink-spawned CLI
         # that itself wired Unison as an MCP server, refuse to spawn another
         # CLI rather than enter a context-window-exploding loop. See
@@ -259,14 +506,7 @@ class CLinkTool(SimpleTool):
         if path_error:
             self._raise_tool_error(path_error)
 
-        selected_cli = request.cli_name or self._default_cli_name
-        if not selected_cli:
-            self._raise_tool_error("No CLI clients are configured for clink.")
-
-        try:
-            client_config = self._registry.get_client(selected_cli)
-        except KeyError as exc:
-            self._raise_tool_error(str(exc))
+        client_config = self._resolve_client(request.cli_name)
 
         try:
             role_config = client_config.get_role(request.role)
@@ -288,6 +528,16 @@ class CLinkTool(SimpleTool):
                     f"'{client_config.name}'. Allowed values: {allowed}."
                 )
 
+        working_dir_override: Path | None = None
+        raw_working_dir = (request.working_dir or "").strip()
+        if raw_working_dir:
+            candidate = Path(raw_working_dir)
+            if not candidate.is_absolute():
+                self._raise_tool_error(f"working_dir must be an absolute path, got: {raw_working_dir}")
+            if not candidate.is_dir():
+                self._raise_tool_error(f"working_dir does not exist or is not a directory: {raw_working_dir}")
+            working_dir_override = candidate
+
         absolute_file_paths = self.get_request_files(request)
         images = self.get_request_images(request)
         continuation_id = self.get_request_continuation_id(request)
@@ -304,24 +554,40 @@ class CLinkTool(SimpleTool):
             prompt_text = await self._prepare_prompt_for_role(
                 request,
                 role_config,
+                client=client_config,
                 system_prompt=system_prompt_text,
                 include_system_prompt=include_system_prompt,
-                cli_name=client_config.name,
             )
         except Exception as exc:
             logger.exception("Failed to prepare clink prompt")
             self._raise_tool_error(f"Failed to prepare prompt: {exc}")
 
-        # Capture pre-execution filesystem snapshot for read-only verification
+        # Capture pre-execution filesystem snapshot for read-only verification.
+        # Rooted at the same directory the CLI will actually run in.
         pre_snapshot = None
         read_only = getattr(request, "read_only", False)
-        snapshot_dir = str(client_config.working_dir) if client_config.working_dir else "."
+        effective_working_dir = working_dir_override or client_config.working_dir
+        snapshot_dir = str(effective_working_dir) if effective_working_dir else "."
+        snapshot_budget = self._snapshot_budget_seconds()
+        pre_stats = SnapshotStats()
         if read_only:
             # Full-depth, include gitignored/transient so a deep or gitignored
             # write (e.g. to .env) cannot silently evade read-only verification.
-            pre_snapshot = capture_snapshot(snapshot_dir, include_ignored=True)
+            # Bulk dirs (.git, node_modules, ...) are pruned and the walk is
+            # time-budgeted so verification can never starve the CLI call
+            # itself of the host's tool-timeout budget.
+            # Off the event loop: a budgeted walk can still take tens of
+            # seconds, and background jobs must not stall poll responses.
+            pre_snapshot = await asyncio.to_thread(
+                capture_snapshot,
+                snapshot_dir,
+                include_ignored=True,
+                time_budget_seconds=snapshot_budget,
+                stats=pre_stats,
+            )
 
         agent = create_agent(client_config)
+        heartbeat = asyncio.create_task(self._progress_heartbeat(client_config.name))
         try:
             result = await agent.run(
                 role=role_config,
@@ -331,6 +597,7 @@ class CLinkTool(SimpleTool):
                 images=images,
                 read_only=read_only,
                 model=requested_model,
+                working_dir=working_dir_override,
             )
         except CLIAgentError as exc:
             metadata = self._build_error_metadata(client_config, exc)
@@ -338,13 +605,29 @@ class CLinkTool(SimpleTool):
                 f"CLI '{client_config.name}' execution failed: {exc}",
                 metadata=metadata,
             )
+        finally:
+            # Stop the heartbeat before any response (success or error) is
+            # built: the spec forbids progress after request completion.
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
 
         metadata = self._build_success_metadata(client_config, role_config, result, requested_model=requested_model)
         metadata = self._prune_metadata(metadata, client_config, reason="normal")
 
+        # Report where the CLI actually ran so callers never have to ask it.
+        metadata["working_dir"] = str(effective_working_dir) if effective_working_dir else os.getcwd()
+
         # Post-execution read-only verification
         if read_only and pre_snapshot is not None:
-            post_snapshot = capture_snapshot(snapshot_dir, include_ignored=True)
+            post_stats = SnapshotStats()
+            post_snapshot = await asyncio.to_thread(
+                capture_snapshot,
+                snapshot_dir,
+                include_ignored=True,
+                time_budget_seconds=snapshot_budget,
+                stats=post_stats,
+            )
             diff = diff_snapshots(pre_snapshot, post_snapshot)
             sandbox_flags = agent.get_read_only_args()
             # Report enforcement honestly. `read_only_enforced` reflects whether a
@@ -361,7 +644,17 @@ class CLinkTool(SimpleTool):
                 "prompt_instruction": True,
                 "post_execution_verification": True,
             }
-            metadata["read_only_verification_coverage"] = "working_dir_subtree"
+            verification_partial = pre_stats.truncated or post_stats.truncated
+            metadata["read_only_verification_coverage"] = (
+                "working_dir_subtree (partial)" if verification_partial else "working_dir_subtree"
+            )
+            metadata["read_only_verification_stats"] = {
+                "pre_entries": pre_stats.entry_count,
+                "post_entries": post_stats.entry_count,
+                "pre_elapsed_seconds": round(pre_stats.elapsed_seconds, 2),
+                "post_elapsed_seconds": round(post_stats.elapsed_seconds, 2),
+                "truncated": verification_partial,
+            }
             by_model, by_bookkeeping = classify_changes(diff, agent.fs_violation_ignore_patterns)
             metadata["read_only_violations"] = {
                 "by_model": by_model.to_dict(),
@@ -411,16 +704,16 @@ class CLinkTool(SimpleTool):
         return [TextContent(type="text", text=tool_output.model_dump_json())]
 
     async def prepare_prompt(self, request) -> str:
-        client_config = self._registry.get_client(request.cli_name)
+        client_config = self._resolve_client(getattr(request, "cli_name", None))
         role_config = client_config.get_role(request.role)
         system_prompt_text = role_config.prompt_path.read_text(encoding="utf-8")
         include_system_prompt = not self._use_external_system_prompt(client_config)
         return await self._prepare_prompt_for_role(
             request,
             role_config,
+            client=client_config,
             system_prompt=system_prompt_text,
             include_system_prompt=include_system_prompt,
-            cli_name=client_config.name,
         )
 
     async def _prepare_prompt_for_role(
@@ -428,17 +721,15 @@ class CLinkTool(SimpleTool):
         request: CLinkRequest,
         role: ResolvedCLIRole,
         *,
+        client: ResolvedCLIClient,
         system_prompt: str,
         include_system_prompt: bool,
-        cli_name: str,
     ) -> str:
         """Load the role prompt and assemble the final user message."""
         self._active_system_prompt = system_prompt
         try:
             user_content = self.handle_prompt_file_with_fallback(request).strip()
-            # Resolved name, not request.cli_name: the latter is optional when
-            # the server exposes a single CLI and the caller omits it.
-            guidance = self._agent_capabilities_guidance(cli_name)
+            guidance = self._agent_capabilities_guidance(client)
             file_section = self._format_file_references(self.get_request_files(request))
 
             sections: list[str] = []
@@ -448,12 +739,18 @@ class CLinkTool(SimpleTool):
 
             # Read-only enforcement: prompt-level instruction
             if getattr(request, "read_only", False):
+                # Stated behaviorally rather than by tool name. Enumerated names go
+                # stale — the five previously listed here match no current target,
+                # including Gemini — and naming a handful implicitly narrows a
+                # prohibition meant to cover every write path, including shell
+                # redirection and tools that did not exist when this was written.
                 sections.append(
                     "=== READ-ONLY MODE ===\n"
                     "CRITICAL CONSTRAINT: You are operating in READ-ONLY mode. "
-                    "You MUST NOT create, modify, delete, or rename any files. "
-                    "Do not use any file-writing tools (EditFile, WriteFile, CreateFile, "
-                    "DeleteFile, ReplaceInFile, or equivalent). "
+                    "You MUST NOT create, modify, delete, or rename any file. "
+                    "Do not use any tool that writes to the filesystem, whatever it is called, "
+                    "and do not achieve the same effect by other means such as shell commands "
+                    "or output redirection. "
                     "Only read files and provide analysis. Any file modification is a violation."
                 )
 
@@ -594,6 +891,59 @@ class CLinkTool(SimpleTool):
             )
         return cleaned
 
+    #: Seconds between MCP progress heartbeats while a CLI runs. Class-level so
+    #: tests can shrink it.
+    _PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 10.0
+
+    async def _progress_heartbeat(self, cli_name: str) -> None:
+        """Emit MCP progress notifications while the spawned CLI runs.
+
+        ``ServerSession.report_progress`` is a no-op when the caller sent no
+        ``progressToken``, so this costs nothing for hosts that don't ask.
+        Hosts that reset their tool timeout on progress keep long CLI runs
+        alive; the rest at least surface liveness to the user. A heartbeat
+        failure must never break the CLI call itself.
+        """
+        if not self._progress_heartbeat_enabled:
+            return
+        started = time.monotonic()
+        sequence = 0
+        while True:
+            await asyncio.sleep(self._PROGRESS_HEARTBEAT_INTERVAL_SECONDS)
+            sequence += 1
+            elapsed = int(time.monotonic() - started)
+            await self._emit_progress(float(sequence), f"clink: {cli_name} still running ({elapsed}s elapsed)")
+
+    async def _emit_progress(self, progress: float, message: str) -> None:
+        """Send one MCP progress notification; a failure never breaks the call."""
+        if not self._progress_heartbeat_enabled:
+            return
+        ctx = get_current_request_context()
+        session = getattr(ctx, "session", None)
+        report = getattr(session, "report_progress", None)
+        if report is None:
+            return
+        try:
+            await report(progress, None, message)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("clink progress heartbeat failed", exc_info=True)
+
+    def _snapshot_budget_seconds(self) -> float:
+        """Wall-clock budget per read-only verification snapshot."""
+        raw = (get_env("CLINK_SNAPSHOT_BUDGET_SECONDS") or "").strip()
+        if raw:
+            try:
+                value = float(raw)
+            except ValueError:
+                logger.warning("Ignoring invalid CLINK_SNAPSHOT_BUDGET_SECONDS=%r (not a number)", raw)
+            else:
+                if value > 0:
+                    return value
+                logger.warning("Ignoring invalid CLINK_SNAPSHOT_BUDGET_SECONDS=%r (must be positive)", raw)
+        return _DEFAULT_SNAPSHOT_BUDGET_SECONDS
+
     def _build_error_metadata(self, client: ResolvedCLIClient, exc: CLIAgentError) -> dict[str, Any]:
         """Assemble metadata for failed CLI calls.
 
@@ -613,24 +963,25 @@ class CLinkTool(SimpleTool):
             metadata["stderr"] = exc.stderr.strip()
         return metadata
 
-    def _raise_tool_error(self, message: str, metadata: dict[str, Any] | None = None) -> None:
+    def _raise_tool_error(self, message: str, metadata: dict[str, Any] | None = None) -> NoReturn:
         error_output = ToolOutput(status="error", content=message, content_type="text", metadata=metadata)
         raise ToolExecutionError(error_output.model_dump_json())
 
-    def _agent_capabilities_guidance(self, cli_name: str) -> str:
-        """Tell the spawned agent which CLI it is, so it knows what it can do.
+    def _agent_capabilities_guidance(self, client: ResolvedCLIClient) -> str:
+        """Build the capabilities guidance for the CLI actually being invoked.
 
-        This used to hardcode "the Gemini CLI agent" for every target, which
-        meant seven of the eight were told they were something else. Harmless
-        for the capability instruction that follows, but a spawned model that
-        is asked what it is will repeat whatever it was told.
+        Interpolates the resolved client's name rather than consulting a lookup
+        table, so a newly registered target is named correctly with no change
+        here. Deliberately asserts no specific capability: ``ResolvedCLIClient``
+        models none, targets differ in what they can do (aider has no web
+        search, for instance), and promising a facility the target lacks
+        misinforms the model about the tools available to it.
         """
-        display = CLI_DISPLAY_NAMES.get(cli_name, cli_name)
         return (
-            f"You are operating through the {display} agent. You have access to your full suite of "
-            "CLI capabilities—including launching web searches, reading files, and using any other "
-            "available tools. Gather current information yourself and deliver the final answer without "
-            "asking the Unison MCP host to perform searches or file reads."
+            f"You are operating through the {client.name} CLI agent. Use whatever tools are "
+            "available to you to gather the information you need. Deliver the final answer "
+            "yourself without asking the Unison MCP host to perform searches or file reads "
+            "on your behalf."
         )
 
     def _format_file_references(self, files: list[str]) -> str:

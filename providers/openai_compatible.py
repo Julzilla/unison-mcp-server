@@ -5,7 +5,6 @@ import ipaddress
 import logging
 import threading
 from collections.abc import Generator
-from typing import Optional
 from urllib.parse import urlparse
 
 from openai import OpenAI
@@ -34,9 +33,9 @@ _THINKING_LADDER = ("minimal", "low", "medium", "high", "max")
 
 
 def _resolve_reasoning_effort(
-    capabilities: Optional[ModelCapabilities],
-    requested: Optional[str],
-) -> Optional[str]:
+    capabilities: ModelCapabilities | None,
+    requested: str | None,
+) -> str | None:
     """Map a ``thinking_mode`` onto a reasoning effort the model accepts.
 
     Returns ``None`` unless the model declares ``supported_reasoning_efforts``,
@@ -72,6 +71,28 @@ def _resolve_reasoning_effort(
     target = _THINKING_LADDER.index(value)
     nearest, _ = min(ranked, key=lambda item: (abs(item[1] - target), -item[1]))
     return nearest
+
+
+class EmptyContentError(RuntimeError):
+    """A 200 OK response that carries no assistant content.
+
+    Raised rather than returned so the condition reaches the retry classifier
+    as a typed error. Carries ``finish_reason`` so retryability can be decided
+    from a field instead of from the message text — see
+    :meth:`OpenAICompatibleProvider._is_error_retryable`, which matches on this
+    class before any string inspection happens.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        finish_reason: str | None = None,
+        reasoning_tokens: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.finish_reason = finish_reason
+        self.reasoning_tokens = reasoning_tokens
 
 
 class OpenAICompatibleProvider(ModelProvider):
@@ -165,7 +186,7 @@ class OpenAICompatibleProvider(ModelProvider):
                         f"Model '{requested_name}' is not allowed by restriction policy. Allowed models: {sorted(self.allowed_models)}"
                     )
 
-    def _parse_allowed_models(self) -> Optional[set[str]]:
+    def _parse_allowed_models(self) -> set[str] | None:
         """Parse allowed models from environment variable.
 
         Returns:
@@ -495,8 +516,8 @@ class OpenAICompatibleProvider(ModelProvider):
         model_name: str,
         messages: list,
         temperature: float,
-        max_output_tokens: Optional[int] = None,
-        capabilities: Optional[ModelCapabilities] = None,
+        max_output_tokens: int | None = None,
+        capabilities: ModelCapabilities | None = None,
         **kwargs,
     ) -> ModelResponse:
         """Generate content using the /v1/responses endpoint for reasoning models."""
@@ -606,10 +627,10 @@ class OpenAICompatibleProvider(ModelProvider):
         self,
         prompt: str,
         model_name: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.3,
-        max_output_tokens: Optional[int] = None,
-        images: Optional[list[str]] = None,
+        max_output_tokens: int | None = None,
+        images: list[str] | None = None,
         **kwargs,
     ) -> ModelResponse:
         """Generate content using the OpenAI-compatible API.
@@ -630,7 +651,7 @@ class OpenAICompatibleProvider(ModelProvider):
         if not self.validate_model_name(model_name):
             raise ValueError(f"Model '{model_name}' not in allowed models list. Allowed models: {self.allowed_models}")
 
-        capabilities: Optional[ModelCapabilities]
+        capabilities: ModelCapabilities | None
         try:
             capabilities = self.get_capabilities(model_name)
         except Exception as exc:
@@ -757,25 +778,26 @@ class OpenAICompatibleProvider(ModelProvider):
             content = response.choices[0].message.content
             usage = self._extract_usage(response)
 
-            # A reasoning model can return HTTP 200 with content="" and
-            # finish_reason="length" when reasoning consumes the whole output
-            # budget. Returning that as a success is worse than failing: the
-            # workflow layer checks `if model_response.content:`, so an empty
-            # string is falsy and the tool completes having produced nothing,
-            # with no error anywhere to explain it. Raising here routes it into
-            # the retry logic below instead, and names the likely cause.
+            # A reasoning model can answer 200 OK with content="" and
+            # finish_reason="length" when reasoning consumes the entire output
+            # budget. Returning that as a success is worse than failing: callers
+            # test `if model_response.content:`, so an empty string is falsy and
+            # the tool completes having produced nothing, with no error anywhere
+            # to explain it. Raising surfaces the cause instead.
             if not (content or "").strip():
                 finish_reason = response.choices[0].finish_reason
                 reasoning_tokens = None
                 try:
                     reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
-                except Exception:
+                except AttributeError:
                     pass
-                raise RuntimeError(
+                raise EmptyContentError(
                     f"{self.FRIENDLY_NAME} returned empty content for {resolved_model} "
                     f"(finish_reason={finish_reason}, reasoning_tokens={reasoning_tokens}). "
                     f"For reasoning models this usually means the output budget was spent "
-                    f"on reasoning; reduce the input size or raise max_tokens."
+                    f"on reasoning; reduce the input size or raise max_tokens.",
+                    finish_reason=finish_reason,
+                    reasoning_tokens=reasoning_tokens,
                 )
 
             return ModelResponse(
@@ -812,10 +834,10 @@ class OpenAICompatibleProvider(ModelProvider):
         self,
         prompt: str,
         model_name: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.3,
-        max_output_tokens: Optional[int] = None,
-        images: Optional[list[str]] = None,
+        max_output_tokens: int | None = None,
+        images: list[str] | None = None,
         **kwargs,
     ) -> Generator[StreamChunk, None, None]:
         """Stream content using the OpenAI-compatible ``stream=True`` API.
@@ -830,7 +852,7 @@ class OpenAICompatibleProvider(ModelProvider):
         if not self.validate_model_name(model_name):
             raise ValueError(f"Model '{model_name}' not in allowed models list. Allowed models: {self.allowed_models}")
 
-        capabilities: Optional[ModelCapabilities]
+        capabilities: ModelCapabilities | None
         try:
             capabilities = self.get_capabilities(model_name)
         except Exception as exc:
@@ -1051,6 +1073,21 @@ class OpenAICompatibleProvider(ModelProvider):
         """
         error_str = str(error).lower()
 
+        # Empty-content decisions read the finish_reason field, never the
+        # message. This has to come first: the message embeds a token count,
+        # and every classifier below inspects the string, so a reasoning_tokens
+        # value of 1500 or 8503 would otherwise match the "500"/"503" retry
+        # indicators and turn retry behaviour into a function of arbitrary
+        # digits — the same failure the structured-status-code comment below
+        # was added to fix.
+        if isinstance(error, EmptyContentError):
+            # finish_reason="length" means the output budget was exhausted.
+            # That is a function of input size and model configuration, both
+            # unchanged on a retry, so retrying spends an expensive reasoning
+            # call to reproduce the result. Any other finish_reason with empty
+            # content is unexplained and plausibly transient, so allow it.
+            return error.finish_reason != "length"
+
         # Timeouts / connection errors are always retryable regardless of code.
         if _OpenAITimeoutError is not None and isinstance(error, _OpenAITimeoutError):
             return True
@@ -1139,7 +1176,7 @@ class OpenAICompatibleProvider(ModelProvider):
         # Delegate to base class three-tier classification
         return super()._is_error_retryable(error)
 
-    def _process_image(self, image_path: str) -> Optional[dict]:
+    def _process_image(self, image_path: str) -> dict | None:
         """Process an image for OpenAI-compatible API."""
         try:
             if image_path.startswith("data:"):

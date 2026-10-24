@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_TIMEOUT_SECONDS = 1800
+# Deliberately generous ceiling: long agentic CLI runs are legitimate, and the
+# MCP host's own tool timeout usually fires first anyway (host cancellation
+# reaps the subprocess). This value is the safety net for hosts that wait.
+# Override per CLI via conf/cli_clients/*.json timeout_seconds, or globally at
+# runtime via CLINK_TIMEOUT_SECONDS.
+DEFAULT_TIMEOUT_SECONDS = 3600
 DEFAULT_STREAM_LIMIT = 10 * 1024 * 1024  # 10MB per stream
 
 # Recursion-guard environment variables (see clink-multi-cli-infrastructure).
@@ -20,21 +25,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BUILTIN_PROMPTS_DIR = PROJECT_ROOT / "systemprompts" / "clink"
 CONFIG_DIR = PROJECT_ROOT / "conf" / "cli_clients"
 USER_CONFIG_DIR = Path.home() / ".unison" / "cli_clients"
-
-
-# Human-readable product names, for prompt text that tells a spawned agent
-# which CLI it is running as. Keys are client names; anything absent falls back
-# to the client name itself, so a user-defined client still reads sensibly.
-CLI_DISPLAY_NAMES: dict[str, str] = {
-    "gemini": "Gemini CLI",
-    "codex": "Codex CLI",
-    "claude": "Claude Code",
-    "opencode": "opencode",
-    "aider": "Aider",
-    "crush": "Crush",
-    "amp": "Amp",
-    "kimi": "Kimi Code CLI",
-}
 
 
 @dataclass(frozen=True)
@@ -97,5 +87,27 @@ INTERNAL_DEFAULTS: dict[str, CLIInternalDefaults] = {
         additional_args=[],
         default_role_prompt="systemprompts/clink/default.txt",
         runner="amp",
+    ),
+    # Copilot invariants, all required rather than cosmetic:
+    #   --output-format json  Copilot defaults to prose; without this the
+    #                         JSONL parser receives text and fails.
+    #   --allow-all-tools     required for non-interactive mode; without it the
+    #                         process blocks on an approval prompt until the
+    #                         clink timeout. Read-only denials still outrank it.
+    #   --no-auto-update      Copilot self-updates by default outside CI, which
+    #                         would let the binary change mid-session.
+    "copilot": CLIInternalDefaults(
+        parser="copilot_jsonl",
+        additional_args=[
+            "--output-format",
+            "json",
+            "--allow-all-tools",
+            "--no-color",
+            "--log-level",
+            "none",
+            "--no-auto-update",
+        ],
+        default_role_prompt="systemprompts/clink/default.txt",
+        runner="copilot",
     ),
 }

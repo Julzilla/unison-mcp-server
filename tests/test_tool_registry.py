@@ -12,7 +12,7 @@ class TestToolRegistryDefinitions:
     """Tests for registry tool definitions."""
 
     def test_all_18_tools_defined(self):
-        """Registry contains definitions for all 18 tools."""
+        """Registry contains definitions for all 18 tools (job control lives on clink itself)."""
         assert len(TOOL_DEFINITIONS) == 18
 
     def test_definition_format(self):

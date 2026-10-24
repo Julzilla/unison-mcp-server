@@ -7,6 +7,7 @@ from .amp import AmpJSONLParser
 from .base import BaseParser, ParsedCLIResponse, ParserError
 from .claude import ClaudeJSONParser
 from .codex import CodexJSONLParser
+from .copilot import CopilotJSONLParser
 from .crush import CrushTextParser
 from .gemini import GeminiJSONParser
 from .kimi import KimiJSONLParser
@@ -21,6 +22,7 @@ _PARSER_CLASSES: dict[str, type[BaseParser]] = {
     CrushTextParser.name: CrushTextParser,
     AmpJSONLParser.name: AmpJSONLParser,
     KimiJSONLParser.name: KimiJSONLParser,
+    CopilotJSONLParser.name: CopilotJSONLParser,
 }
 
 

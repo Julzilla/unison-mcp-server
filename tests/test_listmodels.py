@@ -103,6 +103,37 @@ class TestListModelsTool:
             assert "**Configured Providers**: 3" in content
 
     @pytest.mark.asyncio
+    async def test_execute_with_anthropic_configured(self, tool):
+        """Test listing models with the native Anthropic provider configured"""
+        env_vars = {"ANTHROPIC_API_KEY": "test-key", "DEFAULT_MODEL": "auto"}
+
+        with patch.dict(os.environ, env_vars, clear=True):
+            result = await tool.execute({})
+
+            response = json.loads(result[0].text)
+            content = response["content"]
+
+            # Native Anthropic section renders with the curated catalog
+            assert "Anthropic ✅" in content
+            assert "claude-fable-5" in content
+            assert "claude-sonnet-5" in content
+
+            # Check summary
+            assert "**Configured Providers**: 1" in content
+
+    @pytest.mark.asyncio
+    async def test_anthropic_not_configured_shows_env_key(self, tool):
+        """Without the key, the Anthropic section must still exist and name the env var"""
+        with patch.dict(os.environ, {"DEFAULT_MODEL": "auto"}, clear=True):
+            result = await tool.execute({})
+
+            response = json.loads(result[0].text)
+            content = response["content"]
+
+            assert "Anthropic ❌" in content
+            assert "ANTHROPIC_API_KEY" in content
+
+    @pytest.mark.asyncio
     async def test_execute_with_openrouter(self, tool):
         """Test listing models with OpenRouter configured"""
         env_vars = {"OPENROUTER_API_KEY": "test-key", "DEFAULT_MODEL": "auto"}
@@ -135,6 +166,26 @@ class TestListModelsTool:
             assert "Custom/Local API ✅" in content
             assert "http://localhost:11434" in content
             assert "Local models via Ollama" in content
+
+    @pytest.mark.asyncio
+    async def test_custom_api_placeholder_counts_as_unconfigured(self, tool):
+        """The .env template placeholder must not present Custom/Local as live.
+
+        Provider registration already refuses the placeholder; listmodels
+        reading the raw env var made the two introspection tools contradict
+        each other (version said not configured, listmodels said configured).
+        """
+        env_vars = {"CUSTOM_API_URL": "your_custom_api_url_here", "DEFAULT_MODEL": "auto"}
+
+        with patch.dict(os.environ, env_vars, clear=True):
+            result = await tool.execute({})
+
+            response = json.loads(result[0].text)
+            content = response["content"]
+
+            assert "Custom/Local API ❌" in content
+            assert "your_custom_api_url_here" not in content
+            assert "**Configured Providers**: 0" in content
 
     @pytest.mark.asyncio
     async def test_output_includes_usage_tips(self, tool):

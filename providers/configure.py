@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from utils.env import get_env
+from utils.env import get_custom_api_url, get_env
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ def configure_providers(registry=None):
 
     if registry is None:
         registry = get_default_registry()
+    from providers.anthropic import AnthropicModelProvider
     from providers.azure_openai import AzureOpenAIProvider
     from providers.custom import CustomProvider
     from providers.dial import DIALModelProvider
@@ -57,7 +58,14 @@ def configure_providers(registry=None):
 
     # Log environment variable status for debugging
     logger.debug("Checking environment variables for API keys...")
-    api_keys_to_check = ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "CUSTOM_API_URL"]
+    api_keys_to_check = [
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "GEMINI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "XAI_API_KEY",
+        "CUSTOM_API_URL",
+    ]
     for key in api_keys_to_check:
         value = get_env(key)
         logger.debug(f"  {key}: {'[PRESENT]' if value else '[MISSING]'}")
@@ -67,6 +75,7 @@ def configure_providers(registry=None):
         ProviderSpec("GEMINI_API_KEY", "Gemini", ProviderType.GOOGLE, GeminiModelProvider),
         ProviderSpec("OPENAI_API_KEY", "OpenAI", ProviderType.OPENAI, OpenAIModelProvider),
         ProviderSpec("XAI_API_KEY", "X.AI (GROK)", ProviderType.XAI, XAIModelProvider),
+        ProviderSpec("ANTHROPIC_API_KEY", "Anthropic", ProviderType.ANTHROPIC, AnthropicModelProvider),
         ProviderSpec("DIAL_API_KEY", "DIAL", ProviderType.DIAL, DIALModelProvider),
     ]
 
@@ -116,14 +125,20 @@ def configure_providers(registry=None):
             logger.warning(f"Failed to load Azure OpenAI models: {exc}")
 
     # Special case: Custom provider (Ollama, vLLM, etc.)
-    custom_url = get_env("CUSTOM_API_URL")
+    # get_custom_api_url treats the .env template placeholder as unset — the
+    # same rule listmodels applies, so registration and introspection agree.
+    custom_url = get_custom_api_url()
     if custom_url:
         # IMPORTANT: Always read CUSTOM_API_KEY even if empty
         # - Some providers (vLLM, LM Studio, enterprise APIs) require authentication
         # - Others (Ollama) work without authentication (empty key)
         # - DO NOT remove this variable - it's needed for provider factory function
         custom_key = get_env("CUSTOM_API_KEY", "") or ""  # Default to empty (Ollama doesn't need auth)
+        if custom_key == "your_custom_api_key_here":
+            custom_key = ""  # Placeholder means keyless, not a bearer token
         custom_model = get_env("CUSTOM_MODEL_NAME", "llama3.2") or "llama3.2"
+        if custom_model == "your_custom_model_name_here":
+            custom_model = "llama3.2"
         valid_providers.append(f"Custom API ({custom_url})")
         has_custom = True
         logger.info(f"Custom API endpoint found: {custom_url} with model {custom_model}")
@@ -134,7 +149,7 @@ def configure_providers(registry=None):
 
         # Factory function that creates CustomProvider with proper parameters
         def custom_provider_factory(api_key=None):
-            base_url = get_env("CUSTOM_API_URL", "") or ""
+            base_url = get_custom_api_url() or ""
             return CustomProvider(api_key=api_key or "", base_url=base_url)
 
         registry.register_provider(ProviderType.CUSTOM, custom_provider_factory)
@@ -167,6 +182,7 @@ def configure_providers(registry=None):
             "At least one API configuration is required. Please set either:\n"
             "- GEMINI_API_KEY for Gemini models\n"
             "- OPENAI_API_KEY for OpenAI models\n"
+            "- ANTHROPIC_API_KEY for Anthropic Claude models\n"
             "- XAI_API_KEY for X.AI GROK models\n"
             "- DIAL_API_KEY for DIAL models\n"
             "- OPENROUTER_API_KEY for OpenRouter (multiple models)\n"
@@ -219,7 +235,13 @@ def configure_providers(registry=None):
 
         # Validate restrictions against known models
         provider_instances = {}
-        provider_types_to_validate = [ProviderType.GOOGLE, ProviderType.OPENAI, ProviderType.XAI, ProviderType.DIAL]
+        provider_types_to_validate = [
+            ProviderType.GOOGLE,
+            ProviderType.OPENAI,
+            ProviderType.ANTHROPIC,
+            ProviderType.XAI,
+            ProviderType.DIAL,
+        ]
         for provider_type in provider_types_to_validate:
             provider = registry.get_provider(provider_type)
             if provider:

@@ -2,12 +2,13 @@
 List Models Tool - Display all available models organized by provider
 
 This tool provides a comprehensive view of all AI models available in the system,
-organized by their provider (Gemini, OpenAI, X.AI, OpenRouter, Custom).
-It shows which providers are configured and what models can be used.
+organized by their provider (Gemini, OpenAI, Anthropic, Azure, X.AI, DIAL,
+OpenRouter, Custom). It shows which providers are configured and what models
+can be used.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from mcp.types import TextContent
 
@@ -16,7 +17,7 @@ from providers.registries.openrouter import OpenRouterModelRegistry
 from tools.models import ToolModelCategory, ToolOutput
 from tools.shared.base_models import ToolRequest
 from tools.shared.base_tool import BaseTool
-from utils.env import get_env
+from utils.env import get_custom_api_url, get_env
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class ListModelsTool(BaseTool):
             "additionalProperties": False,
         }
 
-    def get_annotations(self) -> Optional[dict[str, Any]]:
+    def get_annotations(self) -> dict[str, Any] | None:
         """Return tool annotations indicating this is a read-only tool"""
         return {"readOnlyHint": True}
 
@@ -66,7 +67,7 @@ class ListModelsTool(BaseTool):
         """Not used for this utility tool"""
         return ""
 
-    def format_response(self, response: str, request: ToolRequest, model_info: Optional[dict] = None) -> str:
+    def format_response(self, response: str, request: ToolRequest, model_info: dict | None = None) -> str:
         """Not used for this utility tool"""
         return response
 
@@ -100,6 +101,7 @@ class ListModelsTool(BaseTool):
         provider_info = {
             ProviderType.GOOGLE: {"name": "Google Gemini", "env_key": "GEMINI_API_KEY"},
             ProviderType.OPENAI: {"name": "OpenAI", "env_key": "OPENAI_API_KEY"},
+            ProviderType.ANTHROPIC: {"name": "Anthropic", "env_key": "ANTHROPIC_API_KEY"},
             ProviderType.AZURE: {"name": "Azure OpenAI", "env_key": "AZURE_OPENAI_API_KEY"},
             ProviderType.XAI: {"name": "X.AI (Grok)", "env_key": "XAI_API_KEY"},
             ProviderType.DIAL: {"name": "AI DIAL", "env_key": "DIAL_API_KEY"},
@@ -281,7 +283,7 @@ class ListModelsTool(BaseTool):
                             output_lines.append("- *No models allowed by current restriction policy.*")
                     else:
                         available_models = provider.list_models(respect_restrictions=True)
-                        providers_models: dict[str, list[tuple[int, str, Optional[Any]]]] = {}
+                        providers_models: dict[str, list[tuple[int, str, Any | None]]] = {}
 
                         for model_name in available_models:
                             config = registry.resolve(model_name)
@@ -326,8 +328,9 @@ class ListModelsTool(BaseTool):
 
         output_lines.append("")
 
-        # Check Custom API
-        custom_url = get_env("CUSTOM_API_URL")
+        # Check Custom API (placeholder-aware: the .env template value counts
+        # as unset, matching provider registration in providers/configure.py)
+        custom_url = get_custom_api_url()
 
         output_lines.append(f"## Custom/Local API {'✅' if custom_url else '❌'}")
 

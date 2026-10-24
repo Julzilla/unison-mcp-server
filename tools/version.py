@@ -11,7 +11,7 @@ import platform
 import re
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 try:
     from urllib.error import HTTPError, URLError
@@ -24,11 +24,26 @@ except ImportError:
 from mcp.types import TextContent
 
 from config import __author__, __updated__, __version__
+from providers.shared import ProviderType
 from tools.models import ToolModelCategory, ToolOutput
 from tools.shared.base_models import ToolRequest
 from tools.shared.base_tool import BaseTool
 
 logger = logging.getLogger(__name__)
+
+# Display names for the provider-configuration table. The table iterates the
+# ProviderType enum itself so a newly added provider can never be silently
+# missing from `version` output (the enum value is the fallback label).
+PROVIDER_DISPLAY_NAMES: dict[ProviderType, str] = {
+    ProviderType.GOOGLE: "Google Gemini",
+    ProviderType.OPENAI: "OpenAI",
+    ProviderType.ANTHROPIC: "Anthropic",
+    ProviderType.AZURE: "Azure OpenAI",
+    ProviderType.XAI: "X.AI",
+    ProviderType.DIAL: "DIAL",
+    ProviderType.OPENROUTER: "OpenRouter",
+    ProviderType.CUSTOM: "Custom/Local",
+}
 
 
 def parse_version(version_str: str) -> tuple[int, int, int]:
@@ -79,7 +94,7 @@ def compare_versions(current: str, remote: str) -> int:
         return 0
 
 
-def fetch_github_version() -> Optional[tuple[str, str]]:
+def fetch_github_version() -> tuple[str, str] | None:
     """
     Fetch the latest version information from GitHub repository.
 
@@ -151,7 +166,7 @@ class VersionTool(BaseTool):
             "additionalProperties": False,
         }
 
-    def get_annotations(self) -> Optional[dict[str, Any]]:
+    def get_annotations(self) -> dict[str, Any] | None:
         """Return tool annotations indicating this is a read-only tool"""
         return {"readOnlyHint": True}
 
@@ -308,22 +323,11 @@ class VersionTool(BaseTool):
         # Check for configured providers
         try:
             from providers.registry import get_default_registry
-            from providers.shared import ProviderType
 
             provider_status = []
 
-            # Check each provider type
-            provider_types = [
-                ProviderType.GOOGLE,
-                ProviderType.OPENAI,
-                ProviderType.XAI,
-                ProviderType.DIAL,
-                ProviderType.OPENROUTER,
-                ProviderType.CUSTOM,
-            ]
-            provider_names = ["Google Gemini", "OpenAI", "X.AI", "DIAL", "OpenRouter", "Custom/Local"]
-
-            for provider_type, provider_name in zip(provider_types, provider_names):
+            for provider_type in ProviderType:
+                provider_name = PROVIDER_DISPLAY_NAMES.get(provider_type, provider_type.value)
                 provider = get_default_registry().get_provider(provider_type)
                 status = "✅ Configured" if provider is not None else "❌ Not configured"
                 provider_status.append(f"- **{provider_name}**: {status}")

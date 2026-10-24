@@ -78,8 +78,11 @@ You can make your own custom roles in `conf/cli_clients/` or tweak any of the sh
 ## Tool Parameters
 
 - `prompt`: Your question or task for the external CLI (required)
-- `cli_name`: Which CLI to use - `gemini` (default), `claude`, `codex`, or add your own in `conf/cli_clients/`
+- `cli_name`: Which CLI to use - `aider`, `amp`, `claude`, `codex`, `copilot`, `crush`, `gemini`, `opencode`, or add your own in `conf/cli_clients/`. **Required** when more than one CLI is configured; it may be omitted only in a single-CLI deployment, where that CLI is used. There is no vendor-preferred default.
 - `role`: Preset role - `default`, `planner`, `codereviewer` (default: `default`)
+- `model`: Optional model forwarded to the CLI (e.g. `sonnet` for claude, `provider/model` for opencode/crush, named modes for amp)
+- `working_dir`: Optional **absolute path** the spawned CLI runs in. Pass your project or worktree root — some CLIs (Copilot) root their file tools at their cwd and refuse paths outside it. Defaults to the CLI manifest's `working_dir`, then the MCP server's own working directory. The effective directory is reported back as `metadata.working_dir`
+- `read_only`: Restrict the CLI to read-only operations (sandbox flags + prompt instruction + post-execution snapshot verification)
 - `files`: Optional file paths for context (references only, CLI opens files itself)
 - `images`: Optional image paths for visual context
 - `continuation_id`: Continue previous clink conversations
@@ -148,6 +151,7 @@ Clink configurations live in `conf/cli_clients/`. We ship presets for the suppor
 | `crush` | `crush run --quiet` | prompt-only + filesystem snapshot | evolving |
 | `amp` | `amp --execute --stream-json` | prompt-only + filesystem snapshot | new |
 | `kimi` | `kimi --prompt <text> --output-format stream-json` | prompt-only + filesystem snapshot | new |
+| `copilot` | `copilot --output-format json --allow-all-tools --no-color --log-level none --no-auto-update` | `--available-tools view,grep,glob` + `--deny-tool write/shell` (application-level, not an OS sandbox) | new |
 
 **Stability tiers:** `stable` = proven upstream, infrequent flag changes. `evolving` = active development, flags may rev. `new` = recently released, expect changes.
 
@@ -156,6 +160,27 @@ Clink configurations live in `conf/cli_clients/`. We ship presets for the suppor
 > **Aider notes:** Auto-commits are disabled (`--no-auto-commits`) so clink-spawned Aider invocations never create git commits as a side effect. The prompt is delivered via `--message-file` (Aider has no stdin scripting mode). Bookkeeping files Aider creates (`.aider.chat.history.md`, `.aider.input.history`, `.aider.tags.cache.v4/`) are classified as `by_cli_bookkeeping` in `read_only_violations` metadata, not as model writes.
 
 Each preset points to role-specific prompts in `systemprompts/clink/`. Duplicate those files to add more roles or adjust CLI flags.
+
+### Timeouts
+
+Three layers can end a clink call — know which one fired:
+
+1. **Unison's subprocess timeout** — default **3600s (60 min)** per CLI, deliberately generous. Override per CLI with `timeout_seconds` in `conf/cli_clients/<cli>.json`, or globally at runtime with the `CLINK_TIMEOUT_SECONDS` env var (no file edits needed). When this fires, clink kills the whole CLI process tree and returns a clear `timed out after N seconds` error.
+2. **Your MCP host's tool-call timeout** — often much shorter than ours, and usually the one that actually fires. The setup scripts automatically seed `MCP_TOOL_TIMEOUT=900000` (15 min) into the top-level `env` block of `~/.claude/settings.json` when Claude is detected (never overwriting an existing value). To tune it manually for Claude Code, raise `MCP_TOOL_TIMEOUT` (milliseconds) in the environment where the `claude` CLI runs, or in that same top-level `env` block. Claude Desktop's local (embedded Claude Code) sessions honor that same top-level `env` block — or Desktop's local environment editor — after starting a new session or fully restarting Desktop. Do **not** put it under `mcpServers.<name>.env`; that environment goes to the spawned *server*, not the client enforcing the deadline. Desktop's plain chat has no documented knob. When a host cancels, clink reaps the CLI subprocess so it never keeps running orphaned, and while a CLI runs clink emits MCP progress heartbeats every ~10s — hosts that reset their timeout on progress keep long runs alive; hosts that sent no progress token get a guaranteed no-op.
+3. **The CLI's own internal limits** — some CLIs abort long runs themselves and report it in their output; clink surfaces that as the CLI's error, not a clink timeout.
+
+### Long runs under impatient hosts: built-in job control
+
+When the host's tool timeout is shorter than a real CLI run (Claude Desktop's local-agent mode cancels around a minute; a serious Copilot review needs several), no single long MCP request can survive. clink therefore bounds **every** call itself — no separate tools needed:
+
+- A normal `clink` call runs the CLI and waits up to `wait_seconds` (default 45s, max 50s — always under host deadlines). Runs that finish in time return **exactly** what they always did, byte-for-byte, continuation offer included.
+- A run that needs longer returns `status: "running"` with a `job_id` and explicit instructions. **Call `clink` again with only that `job_id`** to keep waiting; each follow-up call waits another bounded window and returns the full original result the moment the CLI finishes (failures re-raise the original error).
+- `job_id` + `cancel: true` aborts the job and kills the CLI's entire process tree.
+- Optional extras: `wait_seconds` tunes the per-call wait; `idempotency_key` makes a retried start return the already-running job instead of launching duplicate paid CLI work.
+
+Job state is in-memory (results retained 30 minutes; up to 3 concurrent jobs). If the MCP server restarts between calls, the follow-up says so explicitly. Each background run executes on an isolated tool instance; progress heartbeats come from whichever foreground call is currently waiting. Set `CLINK_EXECUTION_MODE=blocking` to restore the old fully-blocking behavior on hosts with generous timeouts.
+
+**Read-only snapshot cost:** `read_only` verification walks the CLI's working directory before and after the run. The walk prunes bulk directories (`.git`, `node_modules`, virtualenvs, build outputs) and honors a wall-clock budget — `CLINK_SNAPSHOT_BUDGET_SECONDS`, default 30s per snapshot — so verification can never starve the CLI call itself of the host's tool-timeout budget (observed live: an unbounded walk of a large OneDrive repo took 60-90s per snapshot). When the budget or the 50,000-entry cap truncates the walk, `metadata.read_only_verification_coverage` reads `working_dir_subtree (partial)` and `read_only_verification_stats` carries entry counts and elapsed times.
 
 > **Why `--yolo` for Gemini?** The Gemini CLI currently requires automatic approvals to execute its own tools (for example `run_shell_command`). Without the flag it errors with `Tool "run_shell_command" not found in registry`. See [issue #5382](https://github.com/google-gemini/gemini-cli/issues/5382) for more details.
 
