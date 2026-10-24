@@ -87,9 +87,9 @@ class TestCustomProvider:
         provider = CustomProvider(api_key="test-key", base_url="http://localhost:11434/v1")
 
         # Test that aliases resolve properly
-        # "llama" now resolves to "meta-llama/llama-3-70b" (the OpenRouter model)
+        # "llama" is an alias on the OpenRouter Meta frontier model
         resolved = provider._resolve_model_name("llama")
-        assert resolved == "meta-llama/llama-3-70b"
+        assert resolved == "meta/muse-spark-1.3"
 
         # Test local model alias
         resolved_local = provider._resolve_model_name("local-llama")

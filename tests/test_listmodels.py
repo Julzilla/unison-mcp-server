@@ -65,7 +65,7 @@ class TestListModelsTool:
 
             # Check Gemini shows as configured
             assert "Google Gemini ✅" in content
-            assert "`flash` → `gemini-2.5-flash`" in content
+            assert "`flash` → `gemini-3.8-flash`" in content
             # "pro" alias resolves to the highest-ranked pro model
             assert "`pro`" in content
             assert "1M context" in content

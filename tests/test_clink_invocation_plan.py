@@ -27,7 +27,8 @@ def test_default_plan_contributes_no_argv(cli_name):
     plan = agent.prepare_invocation("hello", [], [])
     extra_args, _stdin, cleanup = _materialize(agent, plan)
     try:
-        assert extra_args == [] or plan.kind == "message_file"
+        # argv-transport agents (kimi) put the prompt on argv by design.
+        assert extra_args == [] or plan.kind in ("message_file", "argv")
     finally:
         cleanup()
 

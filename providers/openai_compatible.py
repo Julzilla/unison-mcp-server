@@ -50,7 +50,10 @@ def _resolve_reasoning_effort(
     its ``low`` setting, so passing ``medium`` straight through would quietly
     buy weaker output than asking for the shallowest supported depth.
     """
-    supported = list(getattr(capabilities, "supported_reasoning_efforts", None) or [])
+    # Only a declared list counts. Anything else (a stub, a mock, a malformed
+    # registry value) means "no effort parameter", never an iteration error.
+    declared = getattr(capabilities, "supported_reasoning_efforts", None)
+    supported = list(declared) if isinstance(declared, (list, tuple)) else []
     if not supported:
         return None
 

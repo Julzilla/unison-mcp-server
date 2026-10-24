@@ -88,18 +88,18 @@ class TestOpenRouterModelRegistry:
 
         # Test various aliases
         test_cases = [
-            ("opus", "anthropic/claude-opus-5"),  # bare alias tracks the frontier
-            ("OPUS", "anthropic/claude-opus-4.8"),  # Case insensitive
-            ("claude-opus", "anthropic/claude-opus-4.8"),
+            ("opus", "anthropic/claude-opus-5.5"),  # bare alias tracks the frontier
+            ("OPUS", "anthropic/claude-opus-5.5"),  # Case insensitive
+            ("claude-opus", "anthropic/claude-opus-5.5"),
             ("opus4.5", "anthropic/claude-opus-4.5"),  # version-pinned aliases stay put
             ("opus4.1", "anthropic/claude-opus-4.1"),  # 4.1 still accessible
-            ("sonnet", "anthropic/claude-sonnet-5"),
+            ("sonnet", "anthropic/claude-sonnet-5.5"),
             ("o3", "openai/o3"),
-            ("deepseek", "deepseek/deepseek-v4-pro"),
+            ("deepseek", "deepseek/deepseek-v4-pro-0813"),
             ("deepseek-r1", "deepseek/deepseek-r1-0528"),
-            ("grok", "x-ai/grok-4.20"),
+            ("grok", "x-ai/grok-4.7"),
             ("gpt5.4", "openai/gpt-5.4"),
-            ("mistral", "mistralai/mistral-large-2411"),
+            ("mistral", "mistralai/mistral-large-4-0"),
         ]
 
         for alias, expected_model in test_cases:
@@ -137,10 +137,10 @@ class TestOpenRouterModelRegistry:
         assert config is not None
 
         # Registry now returns ModelCapabilities objects directly
-        # opus alias now points to 4.8
+        # bare opus tracks the frontier
         assert config.provider == ProviderType.OPENROUTER
-        assert config.model_name == "anthropic/claude-opus-4.8"
-        assert config.friendly_name == "OpenRouter (anthropic/claude-opus-4.8)"
+        assert config.model_name == "anthropic/claude-opus-5.5"
+        assert config.friendly_name == "OpenRouter (anthropic/claude-opus-5.5)"
         assert config.context_window == 1000000
         assert not config.supports_extended_thinking
 

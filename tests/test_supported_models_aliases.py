@@ -21,12 +21,12 @@ class TestSupportedModelsAliases:
             assert isinstance(config.aliases, list), f"{model_name} aliases must be a list"
 
         # Test that well-known aliases resolve to valid models
-        well_known_aliases = ["flash", "gemini", "pro", "flashlite", "flash-lite"]
+        well_known_aliases = ["flash", "gemini", "pro", "lite", "flash-lite"]
         for alias in well_known_aliases:
             assert is_valid_model(ProviderType.GOOGLE, alias), f"Alias '{alias}' should resolve to a valid Gemini model"
 
         # Test alias resolution returns valid models
-        alias_inputs = ["gemini", "pro", "flash", "flashlite", "flash3"]
+        alias_inputs = ["gemini", "pro", "flash", "lite", "flash-3.6"]
         for alias in alias_inputs:
             resolved = provider._resolve_model_name(alias)
             assert provider.validate_model_name(
@@ -40,8 +40,9 @@ class TestSupportedModelsAliases:
                 resolved
             ), f"Case-insensitive alias '{alias}' resolved to '{resolved}' which is not valid"
 
-        # Verify that "pro" and "gemini" resolve to the same flagship model
-        assert provider._resolve_model_name("pro") == provider._resolve_model_name("gemini")
+        # "gemini" is the frontier model; "pro" follows Google's auto-tracking Pro endpoint
+        assert provider._resolve_model_name("gemini") == "gemini-4-argon"
+        assert provider._resolve_model_name("pro") == "gemini-pro-latest"
 
     def test_openai_provider_aliases(self):
         """Test OpenAI provider's alias structure."""

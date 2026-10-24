@@ -26,17 +26,60 @@
   },
   "models": [
     {
+      "model_name": "gemini-4-argon",
+      "friendly_name": "Gemini 4 Argon",
+      "aliases": [
+        "gemini",
+        "argon",
+        "gemini4",
+        "gemini-4"
+      ],
+      "intelligence_score": 20,
+      "description": "Google frontier (13 Oct 2026). 1M ctx, 32K out, thinking, images. USE FOR: consensus panels, design review. Strong image reviewer, but verify specific UI claims it makes.",
+      "context_window": 1048576,
+      "max_output_tokens": 32768,
+      "max_thinking_tokens": 32768,
+      "supports_extended_thinking": true,
+      "supports_system_prompts": true,
+      "supports_streaming": true,
+      "supports_function_calling": true,
+      "supports_json_mode": true,
+      "supports_images": true,
+      "supports_temperature": true,
+      "allow_code_generation": true,
+      "max_image_size_mb": 32.0
+    },
+    {
+      "model_name": "gemini-pro-latest",
+      "friendly_name": "Gemini Pro (latest)",
+      "aliases": [
+        "pro",
+        "gemini-pro"
+      ],
+      "intelligence_score": 19,
+      "description": "Google's current Pro via the auto-tracking gemini-pro-latest endpoint (served gemini-3.1-pro-preview when probed 25 Oct 2026). USE FOR: codereview, thinkdeep, consensus (pair with another lab for diversity, not with other Geminis).",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "max_thinking_tokens": 32768,
+      "supports_extended_thinking": true,
+      "supports_system_prompts": true,
+      "supports_streaming": true,
+      "supports_function_calling": true,
+      "supports_json_mode": true,
+      "supports_images": true,
+      "supports_temperature": true,
+      "allow_code_generation": true,
+      "max_image_size_mb": 32.0
+    },
+    {
       "model_name": "gemini-3.1-pro-preview",
       "friendly_name": "Gemini Pro 3.1 Preview",
       "aliases": [
-        "gemini",
-        "pro",
-        "gemini-pro",
         "gemini3.1",
         "gemini-3.1"
       ],
       "intelligence_score": 19,
-      "description": "Latest flagship (1M context) - Deep reasoning, thinking mode, complex problems, architecture",
+      "description": "Pinned Gemini 3.1 Pro Preview. $2/$12 per M (doubles above 200k input). Short calls work, but in Aug 2026 it severed the connection on every ~40k-char consensus payload; prefer gemini (Argon) for heavy panel work.",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "max_thinking_tokens": 32768,
@@ -51,57 +94,13 @@
       "max_image_size_mb": 32.0
     },
     {
-      "model_name": "gemini-3-pro-preview",
-      "friendly_name": "Gemini Pro 3.0 Preview",
+      "model_name": "gemini-3.8-flash",
+      "friendly_name": "Gemini Flash 3.8",
       "aliases": [
-        "gemini3",
-        "gemini-3"
+        "flash"
       ],
       "intelligence_score": 18,
-      "description": "Previous gen flagship (1M context) - Deep reasoning, thinking mode, complex analysis",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "max_thinking_tokens": 32768,
-      "supports_extended_thinking": true,
-      "supports_system_prompts": true,
-      "supports_streaming": true,
-      "supports_function_calling": true,
-      "supports_json_mode": true,
-      "supports_images": true,
-      "supports_temperature": true,
-      "allow_code_generation": true,
-      "max_image_size_mb": 32.0
-    },
-    {
-      "model_name": "gemini-2.5-pro",
-      "friendly_name": "Gemini Pro 2.5",
-      "aliases": [
-        "gemini-pro-2.5"
-      ],
-      "intelligence_score": 18,
-      "description": "Stable pro model (1M context) - Production-grade reasoning and analysis",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "max_thinking_tokens": 32768,
-      "supports_extended_thinking": true,
-      "supports_system_prompts": true,
-      "supports_streaming": true,
-      "supports_function_calling": true,
-      "supports_json_mode": true,
-      "supports_images": true,
-      "supports_temperature": true,
-      "allow_code_generation": true,
-      "max_image_size_mb": 32.0
-    },
-    {
-      "model_name": "gemini-3-flash-preview",
-      "friendly_name": "Gemini Flash 3.0 Preview",
-      "aliases": [
-        "flash3",
-        "gemini-3-flash"
-      ],
-      "intelligence_score": 12,
-      "description": "Latest fast model (1M context) - Thinking mode, quick analysis, rapid iterations",
+      "description": "Gemini 3.8 Flash - Google fast tier (3 Sep 2026), current flash frontier. 1M ctx. USE FOR: fast workhorse calls. Ignores small thinkingBudget values (spends ~7.7k regardless), so give it output headroom; rejects thinkingBudget=0.",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "max_thinking_tokens": 24576,
@@ -112,17 +111,17 @@
       "supports_json_mode": true,
       "supports_images": true,
       "supports_temperature": true,
-      "max_image_size_mb": 20.0
+      "allow_code_generation": true,
+      "max_image_size_mb": 32.0
     },
     {
-      "model_name": "gemini-2.5-flash",
-      "friendly_name": "Gemini Flash 2.5",
+      "model_name": "gemini-3.6-flash",
+      "friendly_name": "Gemini Flash 3.6",
       "aliases": [
-        "flash",
-        "flash2.5"
+        "flash-3.6"
       ],
-      "intelligence_score": 10,
-      "description": "Stable fast model (1M context) - Quick analysis, simple queries, rapid iterations",
+      "intelligence_score": 18,
+      "description": "Pinned previous Flash; sustained frontier performance on agentic and coding tasks, ~17% fewer output tokens than 3.5 Flash and stronger computer use. USE FOR: fast reviews, scaffolding, web building, agentic/computer-use tasks. $1.50/$7.50 per M (was $9 output on 3.5 Flash). Thinking always on, not disableable.",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "max_thinking_tokens": 24576,
@@ -133,20 +132,62 @@
       "supports_json_mode": true,
       "supports_images": true,
       "supports_temperature": true,
-      "max_image_size_mb": 20.0
+      "allow_code_generation": true,
+      "max_image_size_mb": 32.0
     },
     {
-      "model_name": "gemini-2.5-flash-lite",
-      "friendly_name": "Gemini Flash Lite 2.5",
+      "model_name": "gemini-3.5-flash-lite",
+      "friendly_name": "Gemini Flash-Lite 3.5",
       "aliases": [
-        "flashlite",
+        "lite",
         "flash-lite"
       ],
-      "intelligence_score": 8,
-      "description": "Lightweight fast model (1M context) - Cost-efficient, high throughput",
+      "intelligence_score": 14,
+      "description": "Significantly better quality than 3.1 Flash-Lite at near-cheapest cost; ~350 tok/s, tunable thinking levels, built-in computer use. USE FOR: default cheap workhorse when quality still matters; cheapest metered rung. $0.30/$2.50 per M. Thinking is on and NOT fully disableable (budget=0 rejected); use a low budget for cheap output.",
       "context_window": 1048576,
       "max_output_tokens": 65536,
+      "max_thinking_tokens": 24576,
       "supports_extended_thinking": true,
+      "supports_system_prompts": true,
+      "supports_streaming": true,
+      "supports_function_calling": true,
+      "supports_json_mode": true,
+      "supports_images": true,
+      "supports_temperature": true,
+      "max_image_size_mb": 20.0
+    },
+    {
+      "model_name": "gemma-4-31b-it",
+      "friendly_name": "Gemma 4 31B",
+      "aliases": [
+        "gemma",
+        "gemma-31b"
+      ],
+      "intelligence_score": 11,
+      "description": "FREE of charge. Dense 31B instruction-tuned, 140+ languages, 256K context. Verified live: system prompts, JSON mode, function calling all work; thinking always on and NOT tunable (keep supports_extended_thinking false or every call 400s). USE FOR: bulk classification, first-pass triage, high-volume low-stakes calls. NEVER in consensus panels: same family as Gemini, weaker, adds noise not diversity.",
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "supports_extended_thinking": false,
+      "supports_system_prompts": true,
+      "supports_streaming": true,
+      "supports_function_calling": true,
+      "supports_json_mode": true,
+      "supports_images": true,
+      "supports_temperature": true,
+      "max_image_size_mb": 20.0
+    },
+    {
+      "model_name": "gemma-4-26b-a4b-it",
+      "friendly_name": "Gemma 4 26B A4B",
+      "aliases": [
+        "gemma-26b",
+        "gemma-fast"
+      ],
+      "intelligence_score": 10,
+      "description": "FREE of charge. Sparse MoE (~4B active params) so faster than the 31B, slightly weaker. Same verified capabilities and same constraints as gemma-4-31b-it: thinking not tunable, never in consensus panels. USE FOR: the highest-volume cheapest-possible tier.",
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "supports_extended_thinking": false,
       "supports_system_prompts": true,
       "supports_streaming": true,
       "supports_function_calling": true,
