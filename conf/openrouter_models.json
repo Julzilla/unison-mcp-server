@@ -39,7 +39,7 @@
       "supports_function_calling": false,
       "supports_images": true,
       "max_image_size_mb": 5,
-      "description": "Claude Opus 5.5 - Anthropic frontier (22 Sep 2026). $4/$20 per M, 1M ctx. With ANTHROPIC_API_KEY set, the native Anthropic provider reaches the same model directly.",
+      "description": "Claude Opus 5.5 - Anthropic frontier (22 Sep 2026). $4/$20 per M, 1M ctx.",
       "intelligence_score": 20
     },
     {
@@ -87,6 +87,23 @@
       "max_image_size_mb": 5,
       "description": "Claude Sonnet 5.5 - Anthropic Sonnet frontier (28 Sep 2026), direct upgrade of Sonnet 5. $2/$10 per M, 1M ctx.",
       "intelligence_score": 18
+    },
+    {
+      "model_name": "anthropic/claude-haiku-5.5",
+      "aliases": [
+        "haiku",
+        "haiku5.5",
+        "claude-haiku"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_extended_thinking": false,
+      "supports_json_mode": true,
+      "supports_function_calling": true,
+      "supports_images": true,
+      "max_image_size_mb": 5,
+      "intelligence_score": 12,
+      "description": "Claude Haiku 5.5 - Anthropic's fast tier (8 Oct 2026). $0.10/$0.50 per M (prompts up to 100K), 1M ctx. USE FOR: cheap, fast triage and bulk calls."
     },
     {
       "model_name": "anthropic/claude-sonnet-5",
@@ -260,7 +277,7 @@
       "supports_function_calling": true,
       "supports_images": true,
       "max_image_size_mb": 15,
-      "description": "Google's Gemini 2.5 Flash via OpenRouter with vision (version-pinned; bare 'flash'/'gemini-flash' removed 30 Sep 2026 - 'flash' belongs to the native Gemini roster)",
+      "description": "Google's Gemini 2.5 Flash via OpenRouter with vision (version-pinned; bare 'flash' now tracks google/gemini-3.8-flash)",
       "intelligence_score": 10
     },
     {
@@ -590,7 +607,7 @@
       "supports_function_calling": false,
       "supports_images": true,
       "max_image_size_mb": 20,
-      "description": "Grok 4.5 - xAI (Jul 26), superseded by 4.6. $2/$6 per M. Version-pinned; bare 'grok' now points at 4.6.",
+      "description": "Grok 4.5 - xAI (Jul 26), superseded by 4.6. $2/$6 per M. Version-pinned; bare 'grok' now tracks 4.7.",
       "intelligence_score": 19
     },
     {
@@ -679,6 +696,23 @@
       "description": "Zhipu GLM 5.3 (18 Aug 2026), $1.40/$4.40 per M, 1.3M ctx. Zhipu frontier; cross-tradition seat for consensus panels (second skeptic). Bare \"glm\" tracks here since 3 Sep 2026."
     },
     {
+      "model_name": "z-ai/glm-5.3-prime",
+      "aliases": [
+        "glm-prime",
+        "glm5.3-prime",
+        "glm-5.3-prime"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "supports_extended_thinking": false,
+      "supports_json_mode": true,
+      "supports_function_calling": true,
+      "supports_images": false,
+      "max_image_size_mb": 0,
+      "intelligence_score": 16,
+      "description": "Zhipu GLM 5.3 Prime (24 Sep 2026) - the high-speed GLM 5.3 SKU, same model at 1.5-2x output throughput. $2.80/$8.80 per M, 1M ctx, text only. USE FOR: the Zhipu seat in consensus panels when latency matters (reasoning models time out there). Same family as glm and ox: never seat them together."
+    },
+    {
       "supports_extended_thinking": false,
       "supports_json_mode": true,
       "supports_function_calling": true,
@@ -698,8 +732,8 @@
       "supports_extended_thinking": false,
       "supports_json_mode": true,
       "supports_function_calling": true,
-      "supports_images": false,
-      "max_image_size_mb": 0,
+      "supports_images": true,
+      "max_image_size_mb": 20,
       "model_name": "z-ai/glm-5.3-flash",
       "aliases": [
         "ox",

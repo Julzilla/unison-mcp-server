@@ -30,6 +30,8 @@
       "friendly_name": "Gemini 4 Argon",
       "aliases": [
         "gemini",
+        "pro",
+        "gemini-pro",
         "argon",
         "gemini4",
         "gemini-4"
@@ -53,11 +55,10 @@
       "model_name": "gemini-pro-latest",
       "friendly_name": "Gemini Pro (latest)",
       "aliases": [
-        "pro",
-        "gemini-pro"
+        "pro-latest"
       ],
       "intelligence_score": 19,
-      "description": "Google's current Pro via the auto-tracking gemini-pro-latest endpoint (served gemini-3.1-pro-preview when probed 25 Oct 2026). USE FOR: codereview, thinkdeep, consensus (pair with another lab for diversity, not with other Geminis).",
+      "description": "Google's auto-tracking gemini-pro-latest endpoint, pinned as pro-latest (served gemini-3.1-pro-preview when probed 25 Oct 2026). Bare pro moved to Gemini 4 Argon, the current frontier.",
       "context_window": 1048576,
       "max_output_tokens": 65536,
       "max_thinking_tokens": 32768,
@@ -140,7 +141,8 @@
       "friendly_name": "Gemini Flash-Lite 3.5",
       "aliases": [
         "lite",
-        "flash-lite"
+        "flash-lite",
+        "flashlite"
       ],
       "intelligence_score": 14,
       "description": "Significantly better quality than 3.1 Flash-Lite at near-cheapest cost; ~350 tok/s, tunable thinking levels, built-in computer use. USE FOR: default cheap workhorse when quality still matters; cheapest metered rung. $0.30/$2.50 per M. Thinking is on and NOT fully disableable (budget=0 rejected); use a low budget for cheap output.",
@@ -188,6 +190,88 @@
       "context_window": 262144,
       "max_output_tokens": 32768,
       "supports_extended_thinking": false,
+      "supports_system_prompts": true,
+      "supports_streaming": true,
+      "supports_function_calling": true,
+      "supports_json_mode": true,
+      "supports_images": true,
+      "supports_temperature": true,
+      "max_image_size_mb": 20.0
+    },
+    {
+      "model_name": "gemini-2.5-pro",
+      "friendly_name": "Gemini Pro 2.5",
+      "aliases": [
+        "gemini-pro-2.5"
+      ],
+      "intelligence_score": 18,
+      "description": "Stable pro model (1M context) - Production-grade reasoning and analysis. Google stopped serving it to new API keys in 2026; kept for existing keys on a version-pinned alias.",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "max_thinking_tokens": 32768,
+      "supports_extended_thinking": true,
+      "supports_system_prompts": true,
+      "supports_streaming": true,
+      "supports_function_calling": true,
+      "supports_json_mode": true,
+      "supports_images": true,
+      "supports_temperature": true,
+      "allow_code_generation": true,
+      "max_image_size_mb": 32.0
+    },
+    {
+      "model_name": "gemini-3-flash-preview",
+      "friendly_name": "Gemini Flash 3.0 Preview",
+      "aliases": [
+        "flash3",
+        "gemini-3-flash"
+      ],
+      "intelligence_score": 12,
+      "description": "Latest fast model (1M context) - Thinking mode, quick analysis, rapid iterations",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "max_thinking_tokens": 24576,
+      "supports_extended_thinking": true,
+      "supports_system_prompts": true,
+      "supports_streaming": true,
+      "supports_function_calling": true,
+      "supports_json_mode": true,
+      "supports_images": true,
+      "supports_temperature": true,
+      "max_image_size_mb": 20.0
+    },
+    {
+      "model_name": "gemini-2.5-flash",
+      "friendly_name": "Gemini Flash 2.5",
+      "aliases": [
+        "flash2.5"
+      ],
+      "intelligence_score": 10,
+      "description": "Stable fast model (1M context) - Quick analysis, simple queries, rapid iterations. Google stopped serving it to new API keys in 2026; kept for existing keys on a version-pinned alias.",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "max_thinking_tokens": 24576,
+      "supports_extended_thinking": true,
+      "supports_system_prompts": true,
+      "supports_streaming": true,
+      "supports_function_calling": true,
+      "supports_json_mode": true,
+      "supports_images": true,
+      "supports_temperature": true,
+      "max_image_size_mb": 20.0
+    },
+    {
+      "model_name": "gemini-2.5-flash-lite",
+      "friendly_name": "Gemini Flash Lite 2.5",
+      "aliases": [
+        "flashlite2.5",
+        "flash-lite-2.5"
+      ],
+      "intelligence_score": 8,
+      "description": "Lightweight fast model (1M context) - Cost-efficient, high throughput. Google stopped serving it to new API keys in 2026; kept for existing keys on a version-pinned alias.",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_extended_thinking": true,
       "supports_system_prompts": true,
       "supports_streaming": true,
       "supports_function_calling": true,

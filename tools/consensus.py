@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from typing import TYPE_CHECKING, Any
 
 from pydantic import Field, model_validator
@@ -32,10 +33,36 @@ from systemprompts import CONSENSUS_PROMPT
 from tools.shared.base_models import ConsolidatedFindings, WorkflowRequest
 from utils.circuit_breaker import ProviderUnavailable
 from utils.conversation_memory import MAX_CONVERSATION_TURNS, create_thread, get_thread
+from utils.env import get_env
 
 from .workflow.base import WorkflowTool
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_CONSENSUS_MODEL_TIMEOUT_SECONDS = 120.0
+
+
+def _consensus_model_timeout() -> float:
+    """Per-model consensus timeout, from CONSENSUS_MODEL_TIMEOUT_SECONDS if valid.
+
+    Frontier reasoning models can need well over two minutes on a long review
+    prompt, and the fixed 120s used to drop those seats silently. Invalid or
+    non-positive values are ignored with a warning so a typo cannot disable the
+    timeout.
+    """
+    raw = (get_env("CONSENSUS_MODEL_TIMEOUT_SECONDS") or "").strip()
+    if not raw:
+        return DEFAULT_CONSENSUS_MODEL_TIMEOUT_SECONDS
+    try:
+        parsed = float(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid CONSENSUS_MODEL_TIMEOUT_SECONDS=%r (not a number)", raw)
+        return DEFAULT_CONSENSUS_MODEL_TIMEOUT_SECONDS
+    if not math.isfinite(parsed) or parsed <= 0:
+        logger.warning("Ignoring invalid CONSENSUS_MODEL_TIMEOUT_SECONDS=%r (must be a positive finite number)", raw)
+        return DEFAULT_CONSENSUS_MODEL_TIMEOUT_SECONDS
+    return parsed
+
 
 # Tool-specific field descriptions for consensus workflow
 CONSENSUS_WORKFLOW_FIELD_DESCRIPTIONS = {
@@ -578,10 +605,11 @@ of the evidence, even when it strongly points in one direction.""",
     async def _consult_models_concurrently(self, model_configs: list[dict], request) -> list[dict]:
         """Dispatch all model consultations concurrently via asyncio.gather.
 
-        Each model call is wrapped in a per-model timeout (120s default).
+        Each model call is wrapped in a per-model timeout (120s default,
+        overridable with CONSENSUS_MODEL_TIMEOUT_SECONDS).
         Failures are isolated — one model's error does not cancel the others.
         """
-        per_model_timeout = 120.0
+        per_model_timeout = _consensus_model_timeout()
 
         async def _consult_with_timeout(config: dict) -> dict:
             try:

@@ -73,15 +73,14 @@ KIMI_BLOCK_CONTENT_FIXTURE = (
 # emits no reasoning_content at all, so this covers forward-compatibility, NOT
 # observed behaviour.
 KIMI_REASONING_ONLY_FIXTURE = (
-    '{"role":"assistant","content":"","reasoning_content":"thinking hard about it",'
-    '"finish_reason":"length"}\n'
+    '{"role":"assistant","content":"","reasoning_content":"thinking hard about it",' '"finish_reason":"length"}\n'
 )
 
 # REAL — stderr from a model name absent from config.toml. This is the failure
 # every `-m` value produces under KIMI_MODEL_* auth.
 KIMI_CONFIG_ERROR_STDERR = (
     'error: failed to run prompt: config.invalid: Model "k3" is not configured '
-    "in config.toml. Add a [models.\"k3\"] entry with max_context_size."
+    'in config.toml. Add a [models."k3"] entry with max_context_size.'
 )
 
 
@@ -322,6 +321,52 @@ class TestKimiEndToEnd:
         assert captured[captured.index("-m") + 1] == "kimi-code/k3"
 
     @pytest.mark.asyncio
+    async def test_prompt_is_redacted_from_returned_command(self, monkeypatch) -> None:
+        """The real argv carries the prompt; the command metadata must not."""
+        client = get_registry().get_client("kimi")
+        agent = create_agent(client)
+        process = _StubProcess(stdout=KIMI_HAPPY_PATH_FIXTURE.encode("utf-8"))
+        captured = self._patch(monkeypatch, process)
+        secret = "review this: API_KEY=hunter2"
+
+        result = await agent.run(role=client.roles["default"], prompt=secret, files=[], images=[])
+
+        assert any(secret in arg for arg in captured)
+        assert not any(secret in arg for arg in result.sanitized_command)
+        assert result.sanitized_command[-1].startswith("<prompt: ")
+
+    @pytest.mark.asyncio
+    async def test_oversized_command_raises_cli_agent_error(self, monkeypatch) -> None:
+        """WinError 206 / E2BIG must surface as a structured error, not a bare OSError."""
+        from clink.agents import CLIAgentError
+
+        client = get_registry().get_client("kimi")
+        agent = create_agent(client)
+
+        async def fake_exec(*_args, **_kw):
+            raise OSError(206, "The filename or extension is too long")
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        with pytest.raises(CLIAgentError, match="may exceed the OS limit"):
+            await agent.run(role=client.roles["default"], prompt="x" * 50, files=[], images=[])
+
+    @pytest.mark.asyncio
+    async def test_runtime_model_replaces_manifest_model_flag(self, monkeypatch) -> None:
+        """A -m in the manifest args is stripped, so the runtime model wins alone."""
+        client = get_registry().get_client("kimi")
+        agent = create_agent(client)
+        monkeypatch.setattr(client, "config_args", [*client.config_args, "-m", "kimi-code/kimi-for-coding"])
+        process = _StubProcess(stdout=KIMI_HAPPY_PATH_FIXTURE.encode("utf-8"))
+        captured = self._patch(monkeypatch, process)
+
+        await agent.run(role=client.roles["default"], prompt="hi", files=[], images=[], model="kimi-code/k3")
+
+        assert captured.count("-m") == 1
+        assert captured[captured.index("-m") + 1] == "kimi-code/k3"
+
+    @pytest.mark.asyncio
     async def test_blank_output_raises_rather_than_succeeding(self, monkeypatch) -> None:
         """A run that exits 0 with only bookkeeping must not read as success."""
         client = get_registry().get_client("kimi")
@@ -351,3 +396,19 @@ class TestKimiRecursionGuard:
     def test_depth_propagates_to_child_env(self) -> None:
         env = KimiAgent(_make_client())._build_environment()
         assert env[CLINK_DEPTH_ENV_VAR] == "1"
+
+
+def test_attached_images_are_dropped_with_a_warning(caplog):
+    """--prompt is text-only, so images cannot travel; dropping them must be visible."""
+    agent = create_agent(get_registry().get_client("kimi"))
+    with caplog.at_level("WARNING", logger="clink.runner.kimi"):
+        plan = agent.prepare_invocation("describe this", [], ["shot.png"])
+    assert plan.kind == "argv"
+    assert "dropping 1 attached image" in caplog.text
+
+
+def test_long_form_model_flag_is_stripped_whole():
+    """A manifest's --model=value must not survive next to the runtime -m."""
+    agent = create_agent(get_registry().get_client("kimi"))
+    stripped = agent._strip_model_flags(["kimi", "--model=old", "--prompt", "x", "-m", "older"])
+    assert stripped == ["kimi", "--prompt", "x"]

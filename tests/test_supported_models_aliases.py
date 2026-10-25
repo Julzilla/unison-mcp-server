@@ -40,9 +40,9 @@ class TestSupportedModelsAliases:
                 resolved
             ), f"Case-insensitive alias '{alias}' resolved to '{resolved}' which is not valid"
 
-        # "gemini" is the frontier model; "pro" follows Google's auto-tracking Pro endpoint
+        # Verify that "pro" and "gemini" resolve to the same flagship model
+        assert provider._resolve_model_name("pro") == provider._resolve_model_name("gemini")
         assert provider._resolve_model_name("gemini") == "gemini-4-argon"
-        assert provider._resolve_model_name("pro") == "gemini-pro-latest"
 
     def test_openai_provider_aliases(self):
         """Test OpenAI provider's alias structure."""

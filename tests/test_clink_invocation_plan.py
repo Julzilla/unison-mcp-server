@@ -27,8 +27,13 @@ def test_default_plan_contributes_no_argv(cli_name):
     plan = agent.prepare_invocation("hello", [], [])
     extra_args, _stdin, cleanup = _materialize(agent, plan)
     try:
-        # argv-transport agents (kimi) put the prompt on argv by design.
-        assert extra_args == [] or plan.kind in ("message_file", "argv")
+        if plan.kind == "argv":
+            # argv-transport agents (kimi) put the prompt on argv by design, and
+            # nothing else: extra_args itself must still default to empty.
+            assert plan.extra_args == []
+            assert extra_args == ([plan.flag] if plan.flag else []) + ["hello"]
+        else:
+            assert extra_args == [] or plan.kind == "message_file"
     finally:
         cleanup()
 

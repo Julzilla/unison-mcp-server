@@ -185,9 +185,10 @@ class BaseCLIAgent:
         """Remove every occurrence of ``model_flag_aliases`` from ``command``.
 
         Each matched alias is removed together with its immediately-following
-        value. A bare alias that appears as the final token (no following
-        value) is dropped and a WARNING is logged so misconfigured manifests
-        are surfaced. Returns a new list; the input is not mutated.
+        value, and a long-form ``--alias=value`` token is removed whole. A bare
+        alias that appears as the final token (no following value) is dropped
+        and a WARNING is logged so misconfigured manifests are surfaced.
+        Returns a new list; the input is not mutated.
         """
         if not self.model_flag_aliases:
             return list(command)
@@ -197,6 +198,9 @@ class BaseCLIAgent:
         i = 0
         while i < len(command):
             token = command[i]
+            if token.startswith("--") and "=" in token and token.split("=", 1)[0] in aliases:
+                i += 1
+                continue
             if token in aliases:
                 if i + 1 < len(command):
                     i += 2
@@ -292,6 +296,10 @@ class BaseCLIAgent:
         if extra_args:
             command_with_output_flag.extend(extra_args)
             sanitized_command = list(command_with_output_flag)
+            if plan.kind == "argv":
+                # The prompt is the last argv entry. Keep it out of the debug log
+                # and the command metadata returned to the caller.
+                sanitized_command[-1] = f"<prompt: {len(prompt)} chars>"
 
         self._logger.debug("Executing CLI command: %s", " ".join(sanitized_command))
         if cwd:
@@ -323,6 +331,16 @@ class BaseCLIAgent:
         except FileNotFoundError as exc:
             cleanup_plan()
             raise CLIAgentError(f"Executable not found for CLI '{self.client.name}': {exc}") from exc
+        except OSError as exc:
+            # e.g. WinError 206 / E2BIG when an argv-transport prompt exceeds the
+            # OS command-line limit.
+            cleanup_plan()
+            hint = (
+                f" The prompt ({len(prompt)} chars) travels on the command line and may exceed the OS limit."
+                if plan.kind == "argv"
+                else ""
+            )
+            raise CLIAgentError(f"Failed to launch CLI '{self.client.name}': {exc}.{hint}") from exc
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(

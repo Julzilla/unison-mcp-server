@@ -18,6 +18,8 @@ class KimiAgent(BaseCLIAgent):
     travel on argv.
     """
 
+    model_flag_aliases: tuple[str, ...] = ("-m", "--model")
+
     def __init__(self, client: ResolvedCLIClient):
         super().__init__(client)
 
@@ -32,10 +34,20 @@ class KimiAgent(BaseCLIAgent):
         Note for large prompts: Windows caps a command line near 32767
         characters, and ``subprocess.list2cmdline`` escaping expands quote-dense
         text well beyond its raw length, so a prompt that measures under the cap
-        can still exceed it once escaped. The tool layer embeds files into the
-        prompt before ``run`` is called, which is what makes that reachable.
+        can still exceed it once escaped. Files travel as path references, not
+        contents, so this takes a long prompt; when it happens the spawn error
+        is raised as a ``CLIAgentError`` naming the prompt length.
+
+        ``--prompt`` takes text only, so images cannot be forwarded. They are
+        dropped with a warning rather than silently, so a caller who attached
+        one can see why the answer ignores it.
         """
-        _ = (files, images)
+        _ = files
+        if images:
+            self._logger.warning(
+                "kimi: --prompt is text-only; dropping %d attached image(s)",
+                len(images),
+            )
         return InvocationPlan(kind="argv", flag="--prompt")
 
     def get_read_only_args(self) -> list[str]:
